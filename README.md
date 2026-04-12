@@ -12,6 +12,11 @@ license: mit
 
 # Influence AI — Data Attribution Evidence Report (Demo)
 
+[![Open in Spaces](https://huggingface.co/datasets/huggingface/badges/resolve/main/open-in-hf-spaces-md-dark.svg)](https://huggingface.co/spaces/ykcao/influence-ai-demo)
+
+**[Try the live demo →](https://huggingface.co/spaces/ykcao/influence-ai-demo)**
+(hosted on HuggingFace Spaces, free CPU tier — runs Pythia-160m for a UI walkthrough)
+
 A Streamlit app that takes a **suspect corpus** and a **control corpus**, runs
 membership inference against an audited language model, and produces a
 p-value-backed evidence report answering:

@@ -23,6 +23,12 @@ APP_DIR = Path(__file__).parent
 EXAMPLES_DIR = APP_DIR / "examples"
 
 
+@st.cache_resource(show_spinner="Loading model weights (cached across users)…")
+def cached_load_model(model_name: str, device: str):
+    """Cache model + tokenizer across sessions so concurrent users share one copy."""
+    return load_model(model_name, device=device)
+
+
 def load_example_jsonl(path: Path) -> list[str]:
     out = []
     for line in path.read_text().splitlines():
@@ -43,6 +49,15 @@ st.caption(
     "Membership inference on a suspect corpus against an audited language model. "
     "Method: Maini et al., *LLM Dataset Inference* (NeurIPS 2024), 16-feature subset "
     "with learned logistic regression."
+)
+
+st.warning(
+    "**This hosted demo uses Pythia-160m on CPU** for a fast, shareable UI walkthrough. "
+    "Pythia-160m does not memorize The Pile heavily enough to produce a decisive "
+    "p-value — expect an **INCONCLUSIVE or NO evidence** verdict on the example corpus. "
+    "The headline result from our experiments (**p ≈ 4.46 × 10⁻⁵ on Pile Wikipedia**) "
+    "requires Pythia-6.9B on an A10G GPU via the Modal backend — see the "
+    "[README](https://github.com/Yikai-Cao/influence-ai-demo) to run that locally."
 )
 
 # ── Sidebar: config ───────────────────────────────────────────────────
@@ -111,13 +126,26 @@ example_available = example_suspect.exists() and example_control.exists()
 
 if example_available:
     st.info(
-        "**Example corpus available.** Click below to load 500 suspect + 1000 control "
-        "Wikipedia passages from the Pile (`pratyushmaini/llm_dataset_inference`). "
-        "These are the exact slices Phase 1b used to reach p=4.46e-05 on Pythia-6.9B."
+        "**Example corpus available.** 500 suspect + 1000 control Wikipedia passages "
+        "from the Pile (`pratyushmaini/llm_dataset_inference`). Pick a demo size "
+        "that fits your patience on CPU."
     )
+    demo_size = st.radio(
+        "Demo size",
+        ["Quick (50 / 100, ~2 min)", "Medium (150 / 300, ~6 min)", "Full (500 / 1000, ~20 min)"],
+        index=0,
+        horizontal=True,
+        help="Subsamples the bundled corpus. Quick is enough to see the pipeline; "
+             "Full matches Phase 1b exactly.",
+    )
+    _size_to_n = {"Quick": 50, "Medium": 150, "Full": 500}
+    n_suspect = next(v for k, v in _size_to_n.items() if demo_size.startswith(k))
+
     if st.button("Load Pile Wikipedia example"):
-        st.session_state["example_suspect"] = load_example_jsonl(example_suspect)
-        st.session_state["example_control"] = load_example_jsonl(example_control)
+        suspect_all = load_example_jsonl(example_suspect)
+        control_all = load_example_jsonl(example_control)
+        st.session_state["example_suspect"] = suspect_all[:n_suspect]
+        st.session_state["example_control"] = control_all[:2 * n_suspect]
         st.session_state.pop("report", None)
 
 col_a, col_b = st.columns(2)
@@ -194,8 +222,8 @@ if run_btn:
             progress_bar.progress(min(1.0, frac))
 
         with status:
-            st.write("Loading model weights…")
-            model, tokenizer = load_model(model_name, device=device)
+            st.write("Loading model weights (cached after first run)…")
+            model, tokenizer = cached_load_model(model_name, device)
             st.write("Running MIA pipeline…")
             report = run_evidence_report(
                 suspect_texts,
