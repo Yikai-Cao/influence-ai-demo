@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+.streamlit/secrets.toml
+smoke_report.md
+results/
+results_full/
+.venv/
+venv/
+.env
