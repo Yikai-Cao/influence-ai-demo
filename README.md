@@ -1,3 +1,15 @@
+---
+title: Influence AI Demo
+emoji: 🔍
+colorFrom: indigo
+colorTo: blue
+sdk: streamlit
+sdk_version: 1.32.0
+app_file: app.py
+pinned: false
+license: mit
+---
+
 # Influence AI — Data Attribution Evidence Report (Demo)
 
 A Streamlit app that takes a **suspect corpus** and a **control corpus**, runs
