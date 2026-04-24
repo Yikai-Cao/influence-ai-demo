@@ -18,21 +18,26 @@ license: mit
 (hosted on HuggingFace Spaces, free CPU tier — runs Pythia-160m for a UI walkthrough)
 
 A Streamlit app that takes a **suspect corpus** and a **control corpus**, runs
-membership inference against an audited language model, and produces a
+membership inference against an audited model, and produces a
 p-value-backed evidence report answering:
 
 > *Was this content used to train the model?*
 
+Two tabs:
+
+- **📄 Text (Pythia)** — the original corpus-level MIA demo on HuggingFace
+  text LMs. Headline result on Pythia-6.9B against Pile-Wikipedia:
+  **p ≈ 4.46 × 10⁻⁵** (positive) / **p ≈ 0.80** (control).
+- **🎵 Audio (MusicGen, beta)** — audio analog targeting
+  `facebook/musicgen-small`. Click **"Load audio example"** to see a
+  pre-computed evidence report instantly (no hosted inference needed).
+
 Prototype built for Stanford Lean Launchpad. Methodology follows
 [Maini et al., *LLM Dataset Inference: Did you train on my dataset?*
-(NeurIPS 2024)](https://arxiv.org/abs/2406.06443) — specifically a
-16-feature subset extracted from a single forward pass, combined with a
-learned logistic regression classifier and a one-sided Welch's t-test.
-
-On Pythia-6.9B against 500 Pile-Wikipedia training passages vs 1000 val
-passages, this pipeline produces **p ≈ 4.46 × 10⁻⁵** (positive) with
-**p ≈ 0.80** (false-positive control) — statistically decisive evidence of
-training-set membership, with the control confirming the pipeline is clean.
+(NeurIPS 2024)](https://arxiv.org/abs/2406.06443) — 16-feature subset
+(text) or 29-feature per-codebook subset (audio) from a single forward
+pass, combined with a learned logistic regression classifier and a
+one-sided Welch's t-test.
 
 ## Quickstart
 
@@ -96,13 +101,18 @@ the positive test set and a false-positive control group.
 
 | File | Purpose |
 |---|---|
-| `app.py` | Streamlit UI |
-| `mia_core.py` | Feature extraction, classifier, t-test, `EvidenceReport` |
-| `report.py` | Markdown report renderer |
-| `modal_backend.py` | Optional Modal A10G backend for large models |
-| `prepare_example_corpora.py` | One-shot downloader for bundled example |
-| `examples/` | 500-suspect + 1000-control Pile Wikipedia JSONL |
-| `smoke_test.py` | Headless end-to-end pipeline test |
+| `app.py` | Streamlit UI (Text + Audio tabs) |
+| `mia_stats.py` | Shared stats layer — classifier, t-test, `EvidenceReport` |
+| `mia_core.py` | **Text** pipeline: 16 features (ppl, zlib, Min-K%, Max-K%) |
+| `mia_audio_core.py` | **Audio** pipeline: MusicGen per-codebook loss, 29 features (ppl / Min-K% / Max-K% per codebook + bitrate_ratio) |
+| `report.py` | Markdown report renderer (text + audio aware) |
+| `modal_backend.py` | Optional Modal A10G backend for large text models |
+| `prepare_example_corpora.py` | One-shot downloader for the Pile Wikipedia example |
+| `examples/pile_wikipedia_{suspect,control}.jsonl` | Bundled text example |
+| `examples/audio_demo_report.json` | Bundled pre-computed audio report |
+| `examples/audio_demo_suspect/` + `audio_demo_control/` | Demo .wav clips |
+| `smoke_test.py` / `smoke_test_audio.py` | Headless end-to-end pipeline tests |
+| `test_audio_synthetic.py` | Synthetic 4-scenario stats test (no MusicGen download) |
 
 ## Limitations — please read before making claims
 
@@ -128,6 +138,20 @@ This is a research prototype. The method has real technical constraints:
   memorizing its training data. Pythia-160m on The Pile does not
   memorize enough for a 16-feature lightweight MIA to detect. You need
   Pythia-1.4B+ (preferably 6.9B+) to see meaningful results.
+- **Audio tab uses base MusicGen-small in the hosted demo**, which
+  produces no signal by design — the pre-computed example correctly
+  shows **NO evidence** verdict. The headline strong-signal audio
+  result (Phase B fine-tuned MusicGen with p < 0.01) requires Modal
+  A10G; see the main project repository's `AUDIO_README.md`.
+
+## Track B (canary / data poisoning, separate prototype)
+
+Gray-box MIA only works on models that expose per-token
+log-probabilities (Pythia, MusicGen, Stable Audio). For closed
+**black-box** models like **Suno, Udio, ElevenLabs**, we also
+prototyped a canary-based approach: inject distinctive detectable
+motifs into unreleased catalog before publication, then probe the
+suspect model later. See `canary_prototype/` in the main repository.
 
 ## Citation
 

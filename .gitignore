@@ -9,3 +9,7 @@ results_full/
 .venv/
 venv/
 .env
+
+# Audio demo .wav files — not needed on HF Space (pre-computed JSON is enough)
+examples/audio_demo_suspect/
+examples/audio_demo_control/

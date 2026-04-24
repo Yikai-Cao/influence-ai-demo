@@ -5,5 +5,11 @@ scipy>=1.11
 numpy>=1.26
 scikit-learn>=1.3
 pandas>=2.0
+# Audio stack — needed for the 🎵 Audio tab. librosa/soundfile are
+# required for librosa.feature.mfcc + chroma and WAV/MP3 I/O.
+# peft is optional (only needed when loading a Phase B LoRA adapter).
+librosa>=0.10
+soundfile>=0.12
+peft>=0.10
 # modal is optional — only needed for the Modal A10G backend.
 # Streamlit Cloud users can skip it. Install locally with: pip install modal
