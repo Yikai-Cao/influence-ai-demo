@@ -1,11 +1,15 @@
 """
 Streamlit evidence-report demo for Influence AI.
 
-Two tabs:
-- Text — upload suspect/control corpus, pick HF LM, run MIA (Phase 1b).
+Three tabs:
+- Text  — upload suspect/control corpus, pick HF LM, run MIA (Phase 1b).
 - Audio — upload suspect/control audio clips, score against MusicGen
   (Phase E; requires local librosa/soundfile/peft install or Modal A10G,
   so not available on the hosted CPU-only demo).
+- Canary — generate a private canary library, embed canaries into a
+  host track, scan suspect model outputs for leaks. Pure-CPU; works
+  on the hosted demo. Plan B wedge for closed black-box models like
+  Suno/Udio.
 
 Run:
     streamlit run app.py
@@ -138,7 +142,11 @@ st.caption(
     "with learned logistic regression. Audio extension uses MusicGen's 4 EnCodec codebooks."
 )
 
-tab_text, tab_audio = st.tabs(["📄 Text (Pythia)", "🎵 Audio (MusicGen, beta)"])
+tab_text, tab_audio, tab_canary = st.tabs([
+    "📄 Text (Pythia)",
+    "🎵 Audio (MusicGen, beta)",
+    "🕵️ Canary (Plan B)",
+])
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -550,3 +558,362 @@ with tab_audio:
             "- This maps to **Level 3** in Sureel's 5-level attribution taxonomy — "
             "corpus-level yes/no, not per-track attribution (that's Level 4, future work).\n"
         )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# TAB 3 — CANARY (Plan B for closed black-box models)
+# ══════════════════════════════════════════════════════════════════════
+
+with tab_canary:
+    st.info(
+        "**Plan B — canary detection for closed black-box models** "
+        "(Suno, Udio, ElevenLabs). The audit MIA on the other two tabs "
+        "needs gray-box log-probabilities, which closed audio models "
+        "don't expose. Canarying is the workaround: register a private "
+        "library of distinctive motifs, mix them imperceptibly into "
+        "your unreleased catalog, then later scan suspect model outputs "
+        "for any of the planted canaries. Pure-CPU; runs on this demo."
+    )
+
+    canary_deps_ok = True
+    try:
+        import librosa  # noqa: F401
+        import soundfile as sf  # noqa: F401
+    except ImportError:
+        canary_deps_ok = False
+        st.error("Audio deps missing on this host — `pip install librosa soundfile`.")
+
+    canary_mode = st.radio(
+        "Step:",
+        [
+            "1️⃣ Generate library",
+            "2️⃣ Embed in track",
+            "3️⃣ Scan suspect outputs",
+        ],
+        horizontal=True,
+        key="canary_mode",
+    )
+
+    # ── Helpers (lazy imports so this tab loads fast) ────────────────────
+
+    def _zip_dir(dir_path: Path) -> bytes:
+        import io, zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for p in dir_path.rglob("*"):
+                if p.is_file():
+                    zf.write(p, arcname=p.relative_to(dir_path))
+        return buf.getvalue()
+
+    def _unzip_to_tmp(zip_bytes: bytes) -> Path:
+        import io, zipfile
+        tmp = Path(tempfile.mkdtemp(prefix="canary_lib_"))
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            zf.extractall(tmp)
+        return tmp
+
+    # ── Mode 1 — Generate library ────────────────────────────────────────
+
+    if canary_mode.startswith("1️⃣"):
+        st.markdown("### Generate a private canary library")
+        st.caption(
+            "Each canary is a 3-second synth motif. The library is "
+            "deterministic — the same `(N, transpositions, seed)` always "
+            "produces the same canaries. **Keep the library private** — "
+            "it's the key that proves embedding + enables detection."
+        )
+        c1, c2, c3 = st.columns(3)
+        n_logical = c1.number_input("N logical canaries", 4, 50, 16,
+                                    key="canary_n_logical")
+        seed = c2.number_input("Seed", 0, 99999, 0, key="canary_seed")
+        transp_choice = c3.radio(
+            "Transpositions",
+            ["[0]", "[-0.5, 0, +0.5]", "[-1, -0.5, 0, +0.5, +1]"],
+            index=1,
+            help="Multiple transpositions close the pitch-shift attack. "
+                 "[-0.5, 0, +0.5] is the recommended default — survives "
+                 "every codec / pitch transform tested.",
+            key="canary_transp",
+        )
+
+        if st.button("Generate library", type="primary",
+                      disabled=not canary_deps_ok, key="canary_gen_btn"):
+            with st.status("Synthesizing canaries…", expanded=True) as status:
+                from canary import canary_generator as cg
+                transpositions = json.loads(transp_choice)
+                tmp = Path(tempfile.mkdtemp(prefix="canary_gen_"))
+                out_dir = tmp / "canaries"
+                cg.generate_library(
+                    int(n_logical), out_dir,
+                    base_seed=int(seed),
+                    transpositions=transpositions,
+                )
+                n_total = int(n_logical) * len(transpositions)
+                st.write(f"  generated {n_total} canary entries in {out_dir}")
+                zip_bytes = _zip_dir(out_dir)
+                st.session_state["canary_library_zip"] = zip_bytes
+                st.session_state["canary_library_meta"] = {
+                    "n_logical": int(n_logical),
+                    "n_total": n_total,
+                    "transpositions": transpositions,
+                    "seed": int(seed),
+                }
+                status.update(label="Library ready", state="complete")
+
+        if "canary_library_zip" in st.session_state:
+            meta = st.session_state["canary_library_meta"]
+            st.success(
+                f"Library: {meta['n_logical']} logical × "
+                f"{len(meta['transpositions'])} transpositions = "
+                f"{meta['n_total']} entries  |  seed={meta['seed']}"
+            )
+            st.download_button(
+                "⬇ Download canary library (zip)",
+                data=st.session_state["canary_library_zip"],
+                file_name=f"canary_library_n{meta['n_logical']}_seed{meta['seed']}.zip",
+                mime="application/zip",
+                key="canary_lib_download",
+            )
+            with st.expander("Preview a few canaries", expanded=False):
+                tmp = _unzip_to_tmp(st.session_state["canary_library_zip"])
+                idx = json.loads((tmp / "canary_index.json").read_text())
+                for c in idx["canaries"][:3]:
+                    st.caption(f"`{c['canary_id']}` — root_freq={c['root_freq_hz']:.1f} Hz")
+                    st.audio(c["path"])
+
+    # ── Mode 2 — Embed canaries ──────────────────────────────────────────
+
+    elif canary_mode.startswith("2️⃣"):
+        st.markdown("### Embed canaries into a host track")
+        st.caption(
+            "Mix N canaries from your library into an unreleased track "
+            "at low gain (default −25 dB → ~28 dB perceptual SNR, "
+            "essentially imperceptible). The output is a `.wav` plus a "
+            "`.manifest.json` recording exactly which canaries went where."
+        )
+
+        lib_source = st.radio(
+            "Library source",
+            ["Use library generated this session", "Upload library zip"],
+            key="canary_embed_lib_source",
+            disabled="canary_library_zip" not in st.session_state,
+        )
+        lib_zip_bytes = None
+        if lib_source.startswith("Use") and "canary_library_zip" in st.session_state:
+            lib_zip_bytes = st.session_state["canary_library_zip"]
+            st.caption("Using the library generated above (Step 1️⃣).")
+        else:
+            uploaded_lib = st.file_uploader(
+                "Library zip (from Step 1️⃣)", type=["zip"],
+                key="canary_embed_lib_upload",
+            )
+            if uploaded_lib:
+                lib_zip_bytes = uploaded_lib.getvalue()
+
+        host_file = st.file_uploader(
+            "Host audio (your unreleased track) — .wav / .mp3 / .flac",
+            type=["wav", "mp3", "flac", "ogg"],
+            key="canary_embed_host",
+        )
+        c1, c2, c3 = st.columns(3)
+        n_to_embed = c1.number_input("N canaries to embed", 1, 20, 3,
+                                     key="canary_embed_n")
+        gain_db = c2.slider("Gain (dB rel. host RMS)", -30, 0, -25,
+                            help="Lower = more imperceptible. -25 dB "
+                                 "recommended for release-quality.",
+                            key="canary_embed_gain")
+        embed_seed = c3.number_input("Embed seed", 0, 99999, 0,
+                                     key="canary_embed_seed")
+
+        if st.button("Embed canaries", type="primary",
+                      disabled=not (canary_deps_ok and lib_zip_bytes and host_file),
+                      key="canary_embed_btn"):
+            with st.status("Embedding…", expanded=True) as status:
+                from canary import canary_embedder as ce
+
+                lib_tmp = _unzip_to_tmp(lib_zip_bytes)
+                lib_index_path = next(lib_tmp.rglob("canary_index.json"))
+
+                host_tmp = Path(tempfile.mkdtemp(prefix="canary_host_"))
+                host_path = host_tmp / host_file.name
+                host_path.write_bytes(host_file.getbuffer())
+                out_path = host_tmp / f"canaried_{host_path.stem}.wav"
+
+                manifest = ce.embed(
+                    host_path=host_path,
+                    canary_index_path=lib_index_path,
+                    out_path=out_path,
+                    n_canaries=int(n_to_embed),
+                    gain_db=float(gain_db),
+                    seed=int(embed_seed),
+                )
+
+                canaried_bytes = out_path.read_bytes()
+                manifest_path = out_path.with_suffix(out_path.suffix + ".manifest.json")
+                manifest_bytes = manifest_path.read_bytes()
+                st.session_state["canary_canaried_bytes"] = canaried_bytes
+                st.session_state["canary_canaried_name"] = out_path.name
+                st.session_state["canary_manifest_bytes"] = manifest_bytes
+                st.session_state["canary_manifest"] = manifest.to_dict()
+                st.session_state["canary_host_bytes"] = host_path.read_bytes()
+                st.session_state["canary_host_name"] = host_path.name
+                status.update(label=f"{manifest.n_canaries} canaries embedded",
+                              state="complete")
+
+        if "canary_canaried_bytes" in st.session_state:
+            m = st.session_state["canary_manifest"]
+            st.success(
+                f"{m['n_canaries']} canaries placed in "
+                f"{m['host_duration_s']:.1f}s host. "
+                f"Host RMS: {m['host_rms_db']:.1f} dBFS."
+            )
+
+            st.markdown("**A/B preview** — listen for the canaries:")
+            c_a, c_b = st.columns(2)
+            with c_a:
+                st.caption("Original host")
+                st.audio(st.session_state["canary_host_bytes"])
+            with c_b:
+                st.caption("Canaried")
+                st.audio(st.session_state["canary_canaried_bytes"])
+
+            with st.expander("Embedding manifest", expanded=False):
+                st.json(m)
+
+            cd1, cd2 = st.columns(2)
+            cd1.download_button(
+                "⬇ Download canaried .wav",
+                data=st.session_state["canary_canaried_bytes"],
+                file_name=st.session_state["canary_canaried_name"],
+                mime="audio/wav",
+                key="canary_canaried_download",
+            )
+            cd2.download_button(
+                "⬇ Download manifest JSON",
+                data=st.session_state["canary_manifest_bytes"],
+                file_name=st.session_state["canary_canaried_name"] + ".manifest.json",
+                mime="application/json",
+                key="canary_manifest_download",
+            )
+
+    # ── Mode 3 — Scan suspect outputs ────────────────────────────────────
+
+    else:
+        st.markdown("### Scan suspect model outputs for leaks")
+        st.caption(
+            "Upload audio you suspect was generated by a model trained on "
+            "your canaried catalog. We compute MFCC + chromagram sliding "
+            "cosine similarity at every (canary × suspect) pair, then "
+            "binomial-test the count of pairs above threshold against the "
+            "calibrated null FPR. Output is a corpus-level p-value."
+        )
+
+        lib_source = st.radio(
+            "Library source",
+            ["Use library generated this session", "Upload library zip"],
+            key="canary_scan_lib_source",
+            disabled="canary_library_zip" not in st.session_state,
+        )
+        lib_zip_bytes = None
+        if lib_source.startswith("Use") and "canary_library_zip" in st.session_state:
+            lib_zip_bytes = st.session_state["canary_library_zip"]
+        else:
+            uploaded_lib = st.file_uploader(
+                "Library zip", type=["zip"],
+                key="canary_scan_lib_upload",
+            )
+            if uploaded_lib:
+                lib_zip_bytes = uploaded_lib.getvalue()
+
+        suspect_files = st.file_uploader(
+            "Suspect audio outputs (multiple)",
+            type=["wav", "mp3", "flac", "ogg", "m4a"],
+            accept_multiple_files=True,
+            key="canary_scan_suspects",
+        )
+        c1, c2 = st.columns(2)
+        threshold = c1.slider("Detection threshold (cosine)", 0.50, 0.95, 0.70,
+                              step=0.01, key="canary_scan_threshold")
+        null_fpr = c2.slider("Null FPR (for binomial test)",
+                              0.001, 0.10, 0.01, step=0.001, format="%.3f",
+                              key="canary_scan_null_fpr")
+
+        if st.button("Run scan", type="primary",
+                      disabled=not (canary_deps_ok and lib_zip_bytes and suspect_files),
+                      key="canary_scan_btn"):
+            with st.status(f"Scanning {len(suspect_files)} clips…",
+                            expanded=True) as status:
+                from canary import canary_detector as cd
+
+                lib_tmp = _unzip_to_tmp(lib_zip_bytes)
+                lib_index_path = next(lib_tmp.rglob("canary_index.json"))
+                canary_index = json.loads(lib_index_path.read_text())
+
+                suspect_dir = Path(tempfile.mkdtemp(prefix="canary_suspect_"))
+                suspect_paths = []
+                for f in suspect_files:
+                    p = suspect_dir / f.name
+                    p.write_bytes(f.getbuffer())
+                    suspect_paths.append(p)
+
+                report = cd.detect(
+                    canary_index, suspect_paths,
+                    threshold=float(threshold),
+                    null_fpr=float(null_fpr),
+                )
+                st.session_state["canary_detection_report"] = report.to_dict()
+                status.update(label="Scan complete", state="complete")
+
+        if "canary_detection_report" in st.session_state:
+            r = st.session_state["canary_detection_report"]
+            verdict = (
+                "STRONG evidence of canary leakage" if r["binomial_p_value"] < 0.001
+                else "MODERATE evidence of canary leakage" if r["binomial_p_value"] < 0.05
+                else "NO evidence of canary leakage"
+            )
+            color = "red" if "STRONG" in verdict else (
+                "orange" if "MODERATE" in verdict else "green")
+            st.markdown(f":{color}[**{verdict}**]")
+
+            mc1, mc2, mc3 = st.columns(3)
+            mc1.metric("Binomial p-value", format_p(r["binomial_p_value"]))
+            mc2.metric("Pairs above threshold",
+                        f"{r['n_pairs_above_threshold']} / "
+                        f"{r['n_canaries'] * r['n_suspect_clips']}")
+            mc3.metric("Expected null pairs",
+                        f"{r['expected_null_pairs']:.2f}")
+
+            with st.expander("Top 20 (canary, suspect) similarity hits"):
+                import pandas as pd
+                df = pd.DataFrame(r["per_pair_scores"])
+                df["suspect_path"] = df["suspect_path"].apply(
+                    lambda p: Path(p).name)
+                st.dataframe(df, use_container_width=True)
+
+            st.download_button(
+                "⬇ Download detection report (JSON)",
+                data=json.dumps(r, indent=2).encode("utf-8"),
+                file_name="canary_detection_report.json",
+                mime="application/json",
+                key="canary_detection_download",
+            )
+
+    # ── Tab footer caveats ──────────────────────────────────────────────
+
+    st.markdown("---")
+    st.markdown(
+        "### Important caveats\n"
+        "- **Only protects forward-looking content.** Catalogs already "
+        "published can't be retroactively canaried.\n"
+        "- **Detection works for memorization-style leaks** (model trained "
+        "on canaried audio reproduces canary motifs at high gain in its "
+        "outputs). Validated end-to-end at p ≤ 10⁻¹⁰ across 18 codec / "
+        "compression / pitch transforms — see `test_canary_robustness.py`.\n"
+        "- **Verbatim file copy at low embed gain is NOT detected** by "
+        "this content-similarity detector. That requires a matched-filter "
+        "detector — different attack class, separate roadmap item.\n"
+        "- **Arms race risk.** Model trainers who suspect canaries can "
+        "filter via deduplication / anomaly detection on their training "
+        "data. Watermarking literature is full of defeated schemes.\n"
+        "- Library is private. Don't share `canary_index.json` publicly."
+    )

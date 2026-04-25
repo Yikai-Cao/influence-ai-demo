@@ -61,13 +61,15 @@ def load_audio_mono(
     fine-tune + scoring agree. Pass clip_seconds=None to keep the
     full clip.
     """
-    import soundfile as sf
     import librosa
 
-    data, sr = sf.read(str(path), dtype="float32", always_2d=False)
-    if data.ndim == 2:
-        data = data.mean(axis=1)
-    if sr != target_sr:
+    # librosa.load handles MP3/WAV/FLAC/OGG via audioread+ffmpeg, so it's
+    # the most portable primary. soundfile alone fails on MP3 with older
+    # libsndfile (Modal debian_slim). librosa also does mono downmix and
+    # resampling in one call.
+    data, sr = librosa.load(str(path), sr=target_sr, mono=True,
+                             dtype="float32")
+    if sr != target_sr:  # defensive; librosa should have resampled
         data = librosa.resample(data, orig_sr=sr, target_sr=target_sr)
         sr = target_sr
     if clip_seconds is not None:
