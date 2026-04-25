@@ -622,17 +622,25 @@ with tab_canary:
             "produces the same canaries. **Keep the library private** — "
             "it's the key that proves embedding + enables detection."
         )
+        # Direct mapping from display label → list, so we don't parse
+        # display strings (avoids the `+0.5` not-valid-JSON gotcha).
+        TRANSP_OPTIONS = {
+            "single pitch (no mitigation)": [0.0],
+            "±0.5 semitones (recommended)":  [-0.5, 0.0, 0.5],
+            "±1 semitone (covers cover/remix)": [-1.0, -0.5, 0.0, 0.5, 1.0],
+        }
         c1, c2, c3 = st.columns(3)
         n_logical = c1.number_input("N logical canaries", 4, 50, 16,
                                     key="canary_n_logical")
         seed = c2.number_input("Seed", 0, 99999, 0, key="canary_seed")
         transp_choice = c3.radio(
             "Transpositions",
-            ["[0]", "[-0.5, 0, +0.5]", "[-1, -0.5, 0, +0.5, +1]"],
+            list(TRANSP_OPTIONS.keys()),
             index=1,
-            help="Multiple transpositions close the pitch-shift attack. "
-                 "[-0.5, 0, +0.5] is the recommended default — survives "
-                 "every codec / pitch transform tested.",
+            help="Multiple transpositions close the pitch-shift attack "
+                 "found in our robustness sweep. ±0.5 semitones survives "
+                 "every codec / pitch transform tested. ±1 adds margin "
+                 "against intentional cover/remix transposition.",
             key="canary_transp",
         )
 
@@ -640,7 +648,7 @@ with tab_canary:
                       disabled=not canary_deps_ok, key="canary_gen_btn"):
             with st.status("Synthesizing canaries…", expanded=True) as status:
                 from canary import canary_generator as cg
-                transpositions = json.loads(transp_choice)
+                transpositions = TRANSP_OPTIONS[transp_choice]
                 tmp = Path(tempfile.mkdtemp(prefix="canary_gen_"))
                 out_dir = tmp / "canaries"
                 cg.generate_library(
