@@ -91,6 +91,73 @@ def save_uploaded_audio(uploaded_files, subdir: str) -> list[Path]:
     return paths
 
 
+def _decode_audio_bytes(b: bytes) -> tuple:
+    """Decode .wav bytes → (mono float32 array, sr). Used by the canary
+    tab's spectrogram visualization."""
+    import io
+    import numpy as np
+    import soundfile as sf
+    data, sr = sf.read(io.BytesIO(b), dtype="float32", always_2d=False)
+    if data.ndim == 2:
+        data = data.mean(axis=1)
+    return data.astype("float32"), sr
+
+
+def _make_spec_panel(samples, sr: int, title: str, canary_windows=None,
+                     time_range=None):
+    """Render one mel-spectrogram subplot. Returns matplotlib Figure.
+
+    canary_windows: list of (start_s, end_s) for cyan overlay rectangles.
+    time_range: optional (start_s, end_s) to zoom into.
+    """
+    import numpy as np
+    import librosa
+    import librosa.display
+    import matplotlib.pyplot as plt
+
+    if time_range is not None:
+        start_s, end_s = time_range
+        i0 = max(0, int(start_s * sr))
+        i1 = min(len(samples), int(end_s * sr))
+        samples = samples[i0:i1]
+        time_offset = start_s
+    else:
+        time_offset = 0.0
+
+    fig, ax = plt.subplots(figsize=(7, 3.2))
+    S = librosa.feature.melspectrogram(y=samples, sr=sr, n_mels=128,
+                                        fmax=min(sr // 2, 16000))
+    S_db = librosa.power_to_db(S, ref=np.max)
+    librosa.display.specshow(
+        S_db, sr=sr, x_axis="time", y_axis="mel",
+        cmap="magma", ax=ax, vmin=-60, vmax=0,
+    )
+    # Re-label x-axis with absolute timestamps when we're zoomed in
+    if time_offset > 0:
+        from matplotlib.ticker import FixedLocator
+        ticks = list(ax.get_xticks())
+        ax.xaxis.set_major_locator(FixedLocator(ticks))
+        ax.set_xticklabels([f"{t + time_offset:.1f}" for t in ticks])
+    ax.set_title(title, fontsize=11)
+    if canary_windows:
+        for (start, end) in canary_windows:
+            rel_start = start - time_offset
+            rel_end = end - time_offset
+            # Skip windows outside the visible range
+            if time_range is not None:
+                if rel_end < 0 or rel_start > (time_range[1] - time_range[0]):
+                    continue
+            # facecolor="cyan" + alpha for translucent fill,
+            # edgecolor (no conflicting `color` kwarg) for the box outline
+            ax.axvspan(
+                max(0, rel_start), rel_end,
+                facecolor="cyan", alpha=0.25,
+                edgecolor="cyan", linewidth=1.5,
+            )
+    fig.tight_layout()
+    return fig
+
+
 def render_report_panel(r: EvidenceReport):
     """Shared result panel for text + audio."""
     verdict = r.verdict()
@@ -784,6 +851,87 @@ with tab_canary:
             with c_b:
                 st.caption("Canaried")
                 st.audio(st.session_state["canary_canaried_bytes"])
+
+            # ── Spectrogram comparison ───────────────────────────────────
+            st.markdown(
+                "**Spectrogram comparison** — cyan rectangles mark the "
+                "canary windows. Even when masked under the host so your "
+                "ears can't pick them out, the canary's spectral signature "
+                "is still present and matchable by the detector."
+            )
+            try:
+                import matplotlib.pyplot as plt
+                host_arr, host_sr = _decode_audio_bytes(
+                    st.session_state["canary_host_bytes"])
+                canaried_arr, canaried_sr = _decode_audio_bytes(
+                    st.session_state["canary_canaried_bytes"])
+                canary_windows = [
+                    (e["offset_s"], e["offset_s"] + e["duration_s"])
+                    for e in m.get("embeddings", [])
+                ]
+                spec_a, spec_b = st.columns(2)
+                with spec_a:
+                    fig_host = _make_spec_panel(
+                        host_arr, host_sr,
+                        title="Original host (no canary)",
+                        canary_windows=None,
+                    )
+                    st.pyplot(fig_host, use_container_width=True)
+                    plt.close(fig_host)
+                with spec_b:
+                    fig_canaried = _make_spec_panel(
+                        canaried_arr, canaried_sr,
+                        title="Canaried (cyan = canary windows)",
+                        canary_windows=canary_windows,
+                    )
+                    st.pyplot(fig_canaried, use_container_width=True)
+                    plt.close(fig_canaried)
+
+                # Zoom into the first canary window
+                if canary_windows:
+                    first = canary_windows[0]
+                    pad = 0.5  # half-second context on each side
+                    zoom_start = max(0, first[0] - pad)
+                    zoom_end = min(len(canaried_arr) / canaried_sr,
+                                    first[1] + pad)
+                    with st.expander(
+                        f"🔍 Zoom into first canary window "
+                        f"({first[0]:.2f}s – {first[1]:.2f}s)",
+                        expanded=False,
+                    ):
+                        zoom_a, zoom_b = st.columns(2)
+                        with zoom_a:
+                            fig_zh = _make_spec_panel(
+                                host_arr, host_sr,
+                                title="Original host (zoom)",
+                                canary_windows=None,
+                                time_range=(zoom_start, zoom_end),
+                            )
+                            st.pyplot(fig_zh, use_container_width=True)
+                            plt.close(fig_zh)
+                        with zoom_b:
+                            fig_zc = _make_spec_panel(
+                                canaried_arr, canaried_sr,
+                                title="Canaried (zoom)",
+                                canary_windows=canary_windows,
+                                time_range=(zoom_start, zoom_end),
+                            )
+                            st.pyplot(fig_zc, use_container_width=True)
+                            plt.close(fig_zc)
+                        st.caption(
+                            "Comparing the same time window in the original "
+                            "vs canaried spectrograms reveals the canary's "
+                            "spectral fingerprint inside the cyan box. "
+                            "If you can't see it visually at very low gains, "
+                            "the detector still finds it via MFCC + chroma "
+                            "cosine similarity."
+                        )
+            except Exception as _spec_err:
+                st.caption(
+                    f"(Spectrogram visualization unavailable: "
+                    f"{type(_spec_err).__name__}: {_spec_err}. "
+                    f"Audio + manifest still downloadable below.)"
+                )
 
             with st.expander("Embedding manifest", expanded=False):
                 st.json(m)

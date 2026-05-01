@@ -11,5 +11,9 @@ pandas>=2.0
 librosa>=0.10
 soundfile>=0.12
 peft>=0.10
+# matplotlib is a transitive of librosa.display but we declare it
+# explicitly so the canary tab's spectrogram comparison reliably
+# loads on a fresh HF Space environment.
+matplotlib>=3.7
 # modal is optional — only needed for the Modal A10G backend.
 # Streamlit Cloud users can skip it. Install locally with: pip install modal
