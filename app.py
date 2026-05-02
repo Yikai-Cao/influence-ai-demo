@@ -91,26 +91,39 @@ def save_uploaded_audio(uploaded_files, subdir: str) -> list[Path]:
     return paths
 
 
-def _make_example_host_bytes(seed: int = 42, duration_s: float = 30.0) -> bytes:
-    """Synthesize a music-like 30 s host clip and return WAV bytes.
+PISTACHIO_ATTRIBUTION = (
+    "Example track: *Pistachio Ice Cream Ragtime* by Lena Orsa "
+    "([Freesound 442789](https://freesound.org/s/442789/)), shipped via "
+    "`librosa.example('pistachio')` — CC-licensed."
+)
+SYNTHETIC_FALLBACK_ATTRIBUTION = (
+    "Example track: synthesized arpeggio (CC0). The CC-BY/PD librosa "
+    "example wasn't reachable in this environment, so this is the fallback."
+)
 
-    Uses the canary generator's arpeggio synthesis under the hood — the
-    same synth that produces 'distractor' clips in our test suite —
-    looped/concatenated with light noise so the result feels like a
-    short instrumental piece rather than a single drone. Self-contained
-    so the demo never needs the visitor to bring their own audio.
+
+def _load_pistachio_track(target_sr: int = 32_000):
+    """Lazy-cached load of librosa's `pistachio` PD music example.
+
+    Returns (samples float32, sr). Raises if librosa can't fetch it
+    (e.g. no internet on first call). Caller should try/except and
+    fall back to a synthetic clip.
     """
-    import io
-    import numpy as np
-    import soundfile as sf
+    if not hasattr(_load_pistachio_track, "_cache"):
+        import librosa
+        path = librosa.example("pistachio")
+        samples, sr = librosa.load(path, sr=target_sr, mono=True, dtype="float32")
+        _load_pistachio_track._cache = (samples, sr)
+    return _load_pistachio_track._cache
 
+
+def _make_synthetic_host(seed: int, duration_s: float, sr: int):
+    """Fallback synth host. Used when librosa example unavailable."""
+    import numpy as np
     from canary import canary_generator as cg
 
-    sr = cg.SAMPLE_RATE
     target_n = int(duration_s * sr)
     rng = np.random.default_rng(seed)
-
-    # Stitch together 4-second arpeggio chunks until we hit duration_s
     chunks = []
     chunk_idx = 0
     while sum(len(c) for c in chunks) < target_n:
@@ -123,17 +136,67 @@ def _make_example_host_bytes(seed: int = 42, duration_s: float = 30.0) -> bytes:
         chunk = chunk + rng.normal(0, 0.015, len(chunk)).astype("float32")
         chunks.append(chunk)
         chunk_idx += 1
-
     samples = np.concatenate(chunks)[:target_n].astype("float32")
+    return samples
+
+
+def _make_example_host_bytes(
+    seed: int = 42, duration_s: float = 30.0,
+) -> tuple[str, bytes, str]:
+    """Return (filename, wav_bytes, attribution_md).
+
+    Tries real CC-licensed music first (`librosa.example('pistachio')`);
+    falls back to the synthetic arpeggio if librosa can't fetch it
+    (offline environments, blocked egress, etc).
+    """
+    import io
+    import numpy as np
+    import soundfile as sf
+
+    from canary import canary_generator as cg
+
+    target_sr = cg.SAMPLE_RATE  # 32 kHz to match canary library
+
+    # Try real music first
+    try:
+        track, sr = _load_pistachio_track(target_sr=target_sr)
+        target_n = int(duration_s * sr)
+        if len(track) >= target_n:
+            samples = track[:target_n].copy()
+        else:
+            # Pistachio is ~30 s. If shorter than requested, loop with seam.
+            n_repeats = (target_n // len(track)) + 1
+            samples = np.tile(track, n_repeats)[:target_n].copy()
+        fade_n = int(0.1 * sr)
+        samples[:fade_n] *= np.linspace(0, 1, fade_n, dtype="float32")
+        samples[-fade_n:] *= np.linspace(1, 0, fade_n, dtype="float32")
+        peak = float(np.max(np.abs(samples))) or 1.0
+        samples = (samples / peak * 0.7).astype("float32")
+        buf = io.BytesIO()
+        sf.write(buf, samples, sr, format="WAV")
+        return (
+            "example_pistachio_30s.wav",
+            buf.getvalue(),
+            PISTACHIO_ATTRIBUTION,
+        )
+    except Exception as _real_err:  # noqa: F841
+        pass
+
+    # Synthetic fallback
+    sr = target_sr
+    samples = _make_synthetic_host(seed, duration_s, sr)
     fade_n = int(0.1 * sr)
     samples[:fade_n] *= np.linspace(0, 1, fade_n, dtype="float32")
     samples[-fade_n:] *= np.linspace(1, 0, fade_n, dtype="float32")
     peak = float(np.max(np.abs(samples))) or 1.0
     samples = (samples / peak * 0.6).astype("float32")
-
     buf = io.BytesIO()
     sf.write(buf, samples, sr, format="WAV")
-    return buf.getvalue()
+    return (
+        "example_synth_30s.wav",
+        buf.getvalue(),
+        SYNTHETIC_FALLBACK_ATTRIBUTION,
+    )
 
 
 def _make_example_suspect_set(
@@ -142,11 +205,12 @@ def _make_example_suspect_set(
     n_clean: int = 3,
     seed: int = 7,
     apply_codec: bool = True,
-) -> list[tuple[str, bytes]]:
+) -> tuple[list[tuple[str, bytes]], str]:
     """Generate a small example suspect-output set so visitors can run
     Mode 3 (Scan) end-to-end without bringing their own files.
 
-    Returns a list of (filename, wav_bytes) tuples, mixing:
+    Returns (blobs, attribution_md) where blobs is a list of
+    (filename, wav_bytes) tuples mixing:
 
       n_leaked clips: synthetic host with a known canary mixed in at
         high gain (~0.7), then run through the `neural_codec_aggressive`
@@ -178,12 +242,43 @@ def _make_example_suspect_set(
     library_canaries = index["canaries"]
 
     sr = cg.SAMPLE_RATE
-    clip_seconds = 8.0
+    clip_seconds = 6.0  # 6s clips so 6 of them fit comfortably in 30s pistachio
     clip_n = int(clip_seconds * sr)
 
     rng_picker = random.Random(seed)
 
-    def _synth_host(host_seed: int) -> np.ndarray:
+    # Try to use the real CC-licensed track as the host source.
+    # Each suspect clip is a different segment of the same track, so
+    # the leaked + clean clips share musical character (which is the
+    # realistic case for "many model outputs from the same training").
+    using_real_host = False
+    real_track_samples = None
+    try:
+        real_track_samples, real_track_sr = _load_pistachio_track(target_sr=sr)
+        using_real_host = True
+    except Exception:
+        pass
+
+    def _slice_real_host(idx: int, total_clips: int) -> np.ndarray:
+        """Get the idx-th 6-second segment of pistachio, evenly spread."""
+        track_len = len(real_track_samples)
+        max_start = max(0, track_len - clip_n)
+        if total_clips <= 1:
+            start = 0
+        else:
+            start = int(idx * max_start / (total_clips - 1))
+        end = start + clip_n
+        if end > track_len:
+            # Loop with seam if we run off the end (shouldn't happen
+            # for pistachio @ 30 s, 6 clips × 6 s, but defensive)
+            tail = end - track_len
+            seg = np.concatenate([real_track_samples[start:],
+                                   real_track_samples[:tail]])
+        else:
+            seg = real_track_samples[start:end].copy()
+        return seg.astype("float32")
+
+    def _synth_host_fallback(host_seed: int) -> np.ndarray:
         spec = cg.sample_spec(
             f"suspect_host_{host_seed}", seed=20_000 + host_seed,
             duration_s=clip_seconds,
@@ -192,6 +287,13 @@ def _make_example_suspect_set(
         rng = np.random.default_rng(host_seed)
         clip = clip + rng.normal(0, 0.02, len(clip)).astype("float32")
         return clip[:clip_n].astype("float32")
+
+    total_clips = n_leaked + n_clean
+
+    def _get_host(idx: int, fallback_seed: int) -> np.ndarray:
+        if using_real_host:
+            return _slice_real_host(idx, total_clips)
+        return _synth_host_fallback(fallback_seed)
 
     def _codec(clip: np.ndarray, c_seed: int) -> np.ndarray:
         if not apply_codec:
@@ -217,9 +319,9 @@ def _make_example_suspect_set(
                                       always_2d=False)
         if canary_audio.ndim == 2:
             canary_audio = canary_audio.mean(axis=1)
-        host = _synth_host(host_seed=200 + i)
+        host = _get_host(idx=i, fallback_seed=200 + i)
         # Mix the canary into a random offset, replacing the host there
-        leak_offset = rng_picker.uniform(1.0, clip_seconds - 4.0)
+        leak_offset = rng_picker.uniform(0.5, clip_seconds - 4.0)
         leak_gain = rng_picker.uniform(0.5, 0.85)
         start = int(leak_offset * sr)
         end = min(start + len(canary_audio), clip_n)
@@ -234,7 +336,7 @@ def _make_example_suspect_set(
 
     # Clean clips: just codec-compressed pristine hosts, no canary
     for i in range(n_clean):
-        host = _synth_host(host_seed=500 + i)
+        host = _get_host(idx=n_leaked + i, fallback_seed=500 + i)
         host = _codec(host, c_seed=600 + i)
         buf = io.BytesIO()
         sf.write(buf, host, sr, format="WAV")
@@ -242,7 +344,21 @@ def _make_example_suspect_set(
 
     import shutil
     shutil.rmtree(tmp_lib, ignore_errors=True)
-    return out
+
+    if using_real_host:
+        attribution = (
+            PISTACHIO_ATTRIBUTION + " "
+            "Each suspect clip is a different 6-second segment of the same "
+            "track — leaked clips have a canary planted, clean clips don't. "
+            f"All clips run through `neural_codec_light` to simulate codec output."
+        )
+    else:
+        attribution = (
+            SYNTHETIC_FALLBACK_ATTRIBUTION + " "
+            "Suspect clips are synthetic; leaked have planted canaries, "
+            "clean don't, all codec-compressed."
+        )
+    return out, attribution
 
 
 def _decode_audio_bytes(b: bytes) -> tuple:
@@ -950,22 +1066,30 @@ with tab_canary:
         ex_col_a, ex_col_b = st.columns([1, 3])
         with ex_col_a:
             if st.button("🎼 Use example host",
-                          help="Generate a 30s synthetic music-like clip "
-                               "as the host. Useful if you don't have an "
-                               "audio file handy.",
+                          help="Load a 30s real instrumental music clip "
+                               "(CC-licensed via librosa) as the host. "
+                               "Falls back to a synthetic clip if the "
+                               "real track can't be fetched. Useful if "
+                               "you don't have an audio file handy.",
                           disabled=not canary_deps_ok,
                           key="canary_embed_example_host_btn"):
-                example_bytes = _make_example_host_bytes(seed=42, duration_s=30.0)
+                with st.spinner("Loading example host…"):
+                    name, example_bytes, attribution = _make_example_host_bytes(
+                        seed=42, duration_s=30.0,
+                    )
                 st.session_state["canary_example_host_blob"] = (
-                    "example_host_30s.wav", example_bytes,
+                    name, example_bytes,
                 )
+                st.session_state["canary_example_host_attribution"] = attribution
         with ex_col_b:
             if "canary_example_host_blob" in st.session_state:
+                attr = st.session_state.get(
+                    "canary_example_host_attribution",
+                    "Example host loaded.",
+                )
                 st.caption(
-                    f"Example host loaded: "
-                    f"`{st.session_state['canary_example_host_blob'][0]}` "
-                    "(synthesized arpeggio + light noise, 30 s @ 32 kHz). "
-                    "Upload your own to override."
+                    f"📎 `{st.session_state['canary_example_host_blob'][0]}` "
+                    f"loaded. {attr} Upload your own file to override."
                 )
 
         # Resolve the effective host: upload takes precedence over example
@@ -1181,26 +1305,32 @@ with tab_canary:
         ex_col_a, ex_col_b = st.columns([1, 3])
         with ex_col_a:
             if st.button("🎯 Use example outputs",
-                          help="Generate 3 leaked + 3 clean synthetic "
-                               "suspect clips from the loaded library, "
-                               "with codec compression applied. Lets you "
-                               "see what the detector says on a known "
-                               "ground-truth set.",
+                          help="Generate 3 leaked + 3 clean suspect clips "
+                               "from the loaded library, with codec "
+                               "compression applied. Lets you see what "
+                               "the detector says on a known ground-truth "
+                               "set. Uses real CC-licensed music as host "
+                               "where available; falls back to synthetic.",
                           disabled=not (canary_deps_ok and lib_zip_bytes),
                           key="canary_scan_example_btn"):
-                with st.status("Synthesizing example suspect outputs…"):
-                    blobs = _make_example_suspect_set(
+                with st.spinner("Synthesizing example suspect outputs…"):
+                    blobs, attribution = _make_example_suspect_set(
                         lib_zip_bytes, n_leaked=3, n_clean=3, seed=7,
                     )
                     st.session_state["canary_example_suspect_blobs"] = blobs
+                    st.session_state["canary_example_suspect_attribution"] = attribution
         with ex_col_b:
             if "canary_example_suspect_blobs" in st.session_state:
                 names = [name for (name, _) in
                          st.session_state["canary_example_suspect_blobs"]]
+                attr = st.session_state.get(
+                    "canary_example_suspect_attribution",
+                    "Example suspect set loaded.",
+                )
                 st.caption(
-                    f"Example suspect set loaded ({len(names)} clips: "
-                    f"3 with planted canary, 3 clean — all codec-degraded). "
-                    "Upload your own to override."
+                    f"📎 {len(names)} clips loaded "
+                    f"(3 leaked + 3 clean). {attr} "
+                    "Upload your own files to override."
                 )
 
         # Resolve effective suspect set: upload takes precedence
