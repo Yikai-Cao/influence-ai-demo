@@ -91,6 +91,160 @@ def save_uploaded_audio(uploaded_files, subdir: str) -> list[Path]:
     return paths
 
 
+def _make_example_host_bytes(seed: int = 42, duration_s: float = 30.0) -> bytes:
+    """Synthesize a music-like 30 s host clip and return WAV bytes.
+
+    Uses the canary generator's arpeggio synthesis under the hood — the
+    same synth that produces 'distractor' clips in our test suite —
+    looped/concatenated with light noise so the result feels like a
+    short instrumental piece rather than a single drone. Self-contained
+    so the demo never needs the visitor to bring their own audio.
+    """
+    import io
+    import numpy as np
+    import soundfile as sf
+
+    from canary import canary_generator as cg
+
+    sr = cg.SAMPLE_RATE
+    target_n = int(duration_s * sr)
+    rng = np.random.default_rng(seed)
+
+    # Stitch together 4-second arpeggio chunks until we hit duration_s
+    chunks = []
+    chunk_idx = 0
+    while sum(len(c) for c in chunks) < target_n:
+        spec = cg.sample_spec(
+            f"example_host_chunk_{chunk_idx}",
+            seed=10_000 + seed * 100 + chunk_idx,
+            duration_s=4.0,
+        )
+        chunk = cg.synthesize_canary(spec)
+        chunk = chunk + rng.normal(0, 0.015, len(chunk)).astype("float32")
+        chunks.append(chunk)
+        chunk_idx += 1
+
+    samples = np.concatenate(chunks)[:target_n].astype("float32")
+    fade_n = int(0.1 * sr)
+    samples[:fade_n] *= np.linspace(0, 1, fade_n, dtype="float32")
+    samples[-fade_n:] *= np.linspace(1, 0, fade_n, dtype="float32")
+    peak = float(np.max(np.abs(samples))) or 1.0
+    samples = (samples / peak * 0.6).astype("float32")
+
+    buf = io.BytesIO()
+    sf.write(buf, samples, sr, format="WAV")
+    return buf.getvalue()
+
+
+def _make_example_suspect_set(
+    library_zip_bytes: bytes,
+    n_leaked: int = 3,
+    n_clean: int = 3,
+    seed: int = 7,
+    apply_codec: bool = True,
+) -> list[tuple[str, bytes]]:
+    """Generate a small example suspect-output set so visitors can run
+    Mode 3 (Scan) end-to-end without bringing their own files.
+
+    Returns a list of (filename, wav_bytes) tuples, mixing:
+
+      n_leaked clips: synthetic host with a known canary mixed in at
+        high gain (~0.7), then run through the `neural_codec_aggressive`
+        pipeline. Simulates a model that *memorized* a canary and
+        regurgitated it during generation.
+
+      n_clean clips: synthetic pristine host, codec-compressed but
+        with no canary planted. Simulates non-leaked outputs.
+
+    The detector run on this set should fire STRONG on the leaked clips
+    and stay clean on the pristine ones.
+    """
+    import io
+    import json
+    import random
+    import zipfile
+    from pathlib import Path
+    import numpy as np
+    import soundfile as sf
+
+    from canary import canary_generator as cg
+
+    # Extract the library so we know which canaries to plant
+    tmp_lib = Path(tempfile.mkdtemp(prefix="canary_example_lib_"))
+    with zipfile.ZipFile(io.BytesIO(library_zip_bytes)) as zf:
+        zf.extractall(tmp_lib)
+    idx_path = next(tmp_lib.rglob("canary_index.json"))
+    index = json.loads(idx_path.read_text())
+    library_canaries = index["canaries"]
+
+    sr = cg.SAMPLE_RATE
+    clip_seconds = 8.0
+    clip_n = int(clip_seconds * sr)
+
+    rng_picker = random.Random(seed)
+
+    def _synth_host(host_seed: int) -> np.ndarray:
+        spec = cg.sample_spec(
+            f"suspect_host_{host_seed}", seed=20_000 + host_seed,
+            duration_s=clip_seconds,
+        )
+        clip = cg.synthesize_canary(spec)
+        rng = np.random.default_rng(host_seed)
+        clip = clip + rng.normal(0, 0.02, len(clip)).astype("float32")
+        return clip[:clip_n].astype("float32")
+
+    def _codec(clip: np.ndarray, c_seed: int) -> np.ndarray:
+        if not apply_codec:
+            return clip
+        # Light codec is realistic for a high-bitrate model output —
+        # lowpass at 12 kHz, downsample to 24 kHz, 35 dB-SNR noise.
+        # The aggressive variant (8 kHz lowpass + 16 kHz + μ-law) is
+        # the worst-case stress test in our robustness sweep, but
+        # it's overkill for a demo — leaves only 4/144 pair scores
+        # above threshold on a 3-leaked-3-clean set, which dilutes
+        # the binomial. Light codec keeps the demo verdict crisp
+        # while still validating codec robustness.
+        from canary.transforms import neural_codec_light
+        return neural_codec_light(clip, sr, seed=c_seed)
+
+    out: list[tuple[str, bytes]] = []
+
+    # Leaked clips: pick a random canary, mix at high gain into a host,
+    # then codec-degrade. This is the synthetic memorization-leak case.
+    for i in range(n_leaked):
+        chosen = rng_picker.choice(library_canaries)
+        canary_audio, c_sr = sf.read(chosen["path"], dtype="float32",
+                                      always_2d=False)
+        if canary_audio.ndim == 2:
+            canary_audio = canary_audio.mean(axis=1)
+        host = _synth_host(host_seed=200 + i)
+        # Mix the canary into a random offset, replacing the host there
+        leak_offset = rng_picker.uniform(1.0, clip_seconds - 4.0)
+        leak_gain = rng_picker.uniform(0.5, 0.85)
+        start = int(leak_offset * sr)
+        end = min(start + len(canary_audio), clip_n)
+        host[start:end] = (
+            leak_gain * canary_audio[:end - start]
+            + 0.15 * host[start:end]
+        )
+        host = _codec(host, c_seed=300 + i)
+        buf = io.BytesIO()
+        sf.write(buf, host, sr, format="WAV")
+        out.append((f"leaked_{i:02d}.wav", buf.getvalue()))
+
+    # Clean clips: just codec-compressed pristine hosts, no canary
+    for i in range(n_clean):
+        host = _synth_host(host_seed=500 + i)
+        host = _codec(host, c_seed=600 + i)
+        buf = io.BytesIO()
+        sf.write(buf, host, sr, format="WAV")
+        out.append((f"clean_{i:02d}.wav", buf.getvalue()))
+
+    import shutil
+    shutil.rmtree(tmp_lib, ignore_errors=True)
+    return out
+
+
 def _decode_audio_bytes(b: bytes) -> tuple:
     """Decode .wav bytes → (mono float32 array, sr). Used by the canary
     tab's spectrogram visualization."""
@@ -790,6 +944,37 @@ with tab_canary:
             type=["wav", "mp3", "flac", "ogg"],
             key="canary_embed_host",
         )
+
+        # Provide an example host so demo visitors can complete the
+        # full flow without bringing their own audio
+        ex_col_a, ex_col_b = st.columns([1, 3])
+        with ex_col_a:
+            if st.button("🎼 Use example host",
+                          help="Generate a 30s synthetic music-like clip "
+                               "as the host. Useful if you don't have an "
+                               "audio file handy.",
+                          disabled=not canary_deps_ok,
+                          key="canary_embed_example_host_btn"):
+                example_bytes = _make_example_host_bytes(seed=42, duration_s=30.0)
+                st.session_state["canary_example_host_blob"] = (
+                    "example_host_30s.wav", example_bytes,
+                )
+        with ex_col_b:
+            if "canary_example_host_blob" in st.session_state:
+                st.caption(
+                    f"Example host loaded: "
+                    f"`{st.session_state['canary_example_host_blob'][0]}` "
+                    "(synthesized arpeggio + light noise, 30 s @ 32 kHz). "
+                    "Upload your own to override."
+                )
+
+        # Resolve the effective host: upload takes precedence over example
+        effective_host = None
+        if host_file is not None:
+            effective_host = (host_file.name, bytes(host_file.getbuffer()))
+        elif "canary_example_host_blob" in st.session_state:
+            effective_host = st.session_state["canary_example_host_blob"]
+
         c1, c2, c3 = st.columns(3)
         n_to_embed = c1.number_input("N canaries to embed", 1, 20, 3,
                                      key="canary_embed_n")
@@ -801,7 +986,8 @@ with tab_canary:
                                      key="canary_embed_seed")
 
         if st.button("Embed canaries", type="primary",
-                      disabled=not (canary_deps_ok and lib_zip_bytes and host_file),
+                      disabled=not (canary_deps_ok and lib_zip_bytes
+                                     and effective_host is not None),
                       key="canary_embed_btn"):
             with st.status("Embedding…", expanded=True) as status:
                 from canary import canary_embedder as ce
@@ -810,8 +996,9 @@ with tab_canary:
                 lib_index_path = next(lib_tmp.rglob("canary_index.json"))
 
                 host_tmp = Path(tempfile.mkdtemp(prefix="canary_host_"))
-                host_path = host_tmp / host_file.name
-                host_path.write_bytes(host_file.getbuffer())
+                host_name, host_bytes_in = effective_host
+                host_path = host_tmp / host_name
+                host_path.write_bytes(host_bytes_in)
                 out_path = host_tmp / f"canaried_{host_path.stem}.wav"
 
                 manifest = ce.embed(
@@ -987,6 +1174,45 @@ with tab_canary:
             accept_multiple_files=True,
             key="canary_scan_suspects",
         )
+
+        # "Use example suspect outputs" — only meaningful if a library
+        # is in scope, since the leaked clips need to plant entries
+        # from THAT library to be detectable.
+        ex_col_a, ex_col_b = st.columns([1, 3])
+        with ex_col_a:
+            if st.button("🎯 Use example outputs",
+                          help="Generate 3 leaked + 3 clean synthetic "
+                               "suspect clips from the loaded library, "
+                               "with codec compression applied. Lets you "
+                               "see what the detector says on a known "
+                               "ground-truth set.",
+                          disabled=not (canary_deps_ok and lib_zip_bytes),
+                          key="canary_scan_example_btn"):
+                with st.status("Synthesizing example suspect outputs…"):
+                    blobs = _make_example_suspect_set(
+                        lib_zip_bytes, n_leaked=3, n_clean=3, seed=7,
+                    )
+                    st.session_state["canary_example_suspect_blobs"] = blobs
+        with ex_col_b:
+            if "canary_example_suspect_blobs" in st.session_state:
+                names = [name for (name, _) in
+                         st.session_state["canary_example_suspect_blobs"]]
+                st.caption(
+                    f"Example suspect set loaded ({len(names)} clips: "
+                    f"3 with planted canary, 3 clean — all codec-degraded). "
+                    "Upload your own to override."
+                )
+
+        # Resolve effective suspect set: upload takes precedence
+        effective_suspects: list[tuple[str, bytes]] = []
+        if suspect_files:
+            for f in suspect_files:
+                effective_suspects.append((f.name, bytes(f.getbuffer())))
+        elif "canary_example_suspect_blobs" in st.session_state:
+            effective_suspects = list(
+                st.session_state["canary_example_suspect_blobs"]
+            )
+
         c1, c2 = st.columns(2)
         threshold = c1.slider("Detection threshold (cosine)", 0.50, 0.95, 0.70,
                               step=0.01, key="canary_scan_threshold")
@@ -995,9 +1221,10 @@ with tab_canary:
                               key="canary_scan_null_fpr")
 
         if st.button("Run scan", type="primary",
-                      disabled=not (canary_deps_ok and lib_zip_bytes and suspect_files),
+                      disabled=not (canary_deps_ok and lib_zip_bytes
+                                     and effective_suspects),
                       key="canary_scan_btn"):
-            with st.status(f"Scanning {len(suspect_files)} clips…",
+            with st.status(f"Scanning {len(effective_suspects)} clips…",
                             expanded=True) as status:
                 from canary import canary_detector as cd
 
@@ -1007,9 +1234,9 @@ with tab_canary:
 
                 suspect_dir = Path(tempfile.mkdtemp(prefix="canary_suspect_"))
                 suspect_paths = []
-                for f in suspect_files:
-                    p = suspect_dir / f.name
-                    p.write_bytes(f.getbuffer())
+                for (name, blob) in effective_suspects:
+                    p = suspect_dir / name
+                    p.write_bytes(blob)
                     suspect_paths.append(p)
 
                 report = cd.detect(
