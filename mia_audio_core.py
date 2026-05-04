@@ -176,11 +176,18 @@ def encode_audio_to_codes(
             f"Expected sample rate {TARGET_SAMPLE_RATE}, got {sr}. "
             "Resample before calling encode_audio_to_codes."
         )
-    audio_encoder = bundle.model.get_audio_encoder()
+    # When bundle.model is a PeftModel (LoRA-wrapped), forward to base.
+    audio_encoder = (bundle.model.base_model.get_audio_encoder()
+                     if hasattr(bundle.model, "base_model")
+                     else bundle.model.get_audio_encoder())
     with torch.no_grad():
         # shape (1, 1, N_samples) — batch=1, channels=1 (MusicGen-small)
         waveform = torch.tensor(samples, dtype=torch.float32, device=bundle.device)
         waveform = waveform.view(1, 1, -1)
+        # Match encoder dtype — model loaded in fp16 on CUDA needs fp16 input.
+        enc_dtype = next(audio_encoder.parameters()).dtype
+        if waveform.dtype != enc_dtype:
+            waveform = waveform.to(dtype=enc_dtype)
         enc_out = audio_encoder.encode(waveform)
         # HF EnCodec returns (audio_codes=shape(n_quantizers, B, n_q, T), audio_scales)
         # We unify shapes across transformers versions.

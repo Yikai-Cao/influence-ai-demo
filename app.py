@@ -431,17 +431,32 @@ def _make_spec_panel(samples, sr: int, title: str, canary_windows=None,
 def render_report_panel(r: EvidenceReport):
     """Shared result panel for text + audio."""
     verdict = r.verdict()
-    color = {"STRONG": "red", "MODERATE": "orange",
-             "INCONCLUSIVE": "gray", "NO": "green"}
-    badge_color = next((v for k, v in color.items() if verdict.startswith(k)), "gray")
-    st.markdown(f":{badge_color}[**{verdict}**]")
+    # Map verdict word → emoji + color for a louder banner.
+    if verdict.startswith("STRONG"):
+        emoji, color, plain = "🟢", "red", \
+            "This data was very likely used to train the model."
+    elif verdict.startswith("MODERATE"):
+        emoji, color, plain = "🟡", "orange", \
+            "Meaningful signal — bigger sample would make it more certain."
+    elif verdict.startswith("INCONCLUSIVE"):
+        emoji, color, plain = "⚪", "gray", \
+            "Mixed signal. Try a bigger sample, or run on a stronger model."
+    else:
+        emoji, color, plain = "⚪", "green", \
+            "No evidence found. Either the model didn't see this data, " \
+            "or your sample is too small to detect."
+
+    st.markdown(f"### {emoji} :{color}[**{verdict.split('—')[0].strip()}**]")
+    st.markdown(f"*{plain}*")
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Positive p-value", format_p(r.positive_test["p_value"]),
-              help="p < 0.1 → suspect corpus looks like training data")
-    c2.metric("Control p-value", format_p(r.false_positive_control["p_value"]),
-              help="p > 0.3 → pipeline is not producing spurious signal")
-    c3.metric("Classifier t-stat", f"{r.positive_test['t_stat']:+.3f}")
+    c1.metric("Confidence (p-value)", format_p(r.positive_test["p_value"]),
+              help="Lower is more confident. p < 0.001 = STRONG.")
+    c2.metric("Control sanity check", format_p(r.false_positive_control["p_value"]),
+              help="p > 0.3 means the pipeline isn't producing spurious signal.")
+    c3.metric("Effect size (t-stat)", f"{r.positive_test['t_stat']:+.3f}",
+              help="Positive = members look like training data. "
+                   "Negative = unusual; suggests reverse signal or pipeline issue.")
 
     with st.expander("Per-feature breakdown", expanded=False):
         import pandas as pd
@@ -471,18 +486,53 @@ def render_report_panel(r: EvidenceReport):
 
 # ── Page chrome ───────────────────────────────────────────────────────
 
-st.set_page_config(page_title="Influence AI — Evidence Report", layout="wide")
-st.title("Influence AI — Data Attribution Evidence Report")
-st.caption(
-    "Membership inference on a suspect corpus against an audited model. "
-    "Method: Maini et al., *LLM Dataset Inference* (NeurIPS 2024), 16-feature subset "
-    "with learned logistic regression. Audio extension uses MusicGen's 4 EnCodec codebooks."
+st.set_page_config(
+    page_title="Influence AI — Did this AI train on your data?",
+    page_icon="🎯",
+    layout="wide",
 )
 
+# ── Hero ──────────────────────────────────────────────────────────────
+st.title("🎯 Influence AI")
+st.markdown(
+    "#### Did an AI model train on your data?\n"
+    "Three checks, each with a clear yes/no answer and a confidence score."
+)
+
+hero_a, hero_b, hero_c = st.columns(3)
+with hero_a:
+    st.markdown(
+        "**📝 Text**  \n"
+        "Upload writing → check if a language model has seen it."
+    )
+with hero_b:
+    st.markdown(
+        "**🎵 Music**  \n"
+        "Upload audio → check if a music model has seen it."
+    )
+with hero_c:
+    st.markdown(
+        "**🪤 Watermark**  \n"
+        "*Before* you release new music: hide a tag, scan for leaks later."
+    )
+
+with st.expander("How to use this site (30 seconds)", expanded=False):
+    st.markdown(
+        "**1.** Pick a tab for the kind of data you want to check.  \n"
+        "**2.** Click the **example** button (or upload your own files).  \n"
+        "**3.** Hit **Run** — you'll get a **STRONG / MODERATE / NO evidence** "
+        "verdict plus a p-value (lower = more confident).\n\n"
+        "_The hosted demo runs small models on CPU, so headline numbers "
+        "from our experiments (p < 10⁻⁴) need a GPU run — see the "
+        "[README](https://github.com/Yikai-Cao/influence-ai-demo)._"
+    )
+
+st.divider()
+
 tab_text, tab_audio, tab_canary = st.tabs([
-    "📄 Text (Pythia)",
-    "🎵 Audio (MusicGen, beta)",
-    "🕵️ Canary (Plan B)",
+    "📝 Text",
+    "🎵 Music",
+    "🪤 Watermark unreleased music",
 ])
 
 
@@ -491,17 +541,35 @@ tab_text, tab_audio, tab_canary = st.tabs([
 # ══════════════════════════════════════════════════════════════════════
 
 with tab_text:
-    st.warning(
-        "**This hosted demo uses Pythia-160m on CPU** for a fast, shareable UI walkthrough. "
-        "Pythia-160m does not memorize The Pile heavily enough to produce a decisive "
-        "p-value — expect an **INCONCLUSIVE or NO evidence** verdict on the example corpus. "
-        "The headline result from our experiments (**p ≈ 4.46 × 10⁻⁵ on Pile Wikipedia**) "
-        "requires Pythia-6.9B on an A10G GPU via the Modal backend — see the "
-        "[README](https://github.com/Yikai-Cao/influence-ai-demo) to run that locally."
+    st.markdown("### Was my text used to train an LLM?")
+    st.markdown(
+        "Upload writing you suspect a language model has been trained on, plus "
+        "similar writing you're sure it wasn't trained on. We'll tell you how "
+        "confident we are that the model has seen your sample."
     )
 
-    with st.sidebar:
-        st.header("Text tab — Configuration")
+    info_col, demo_col = st.columns([2, 1])
+    with info_col:
+        with st.expander("How to read the verdict", expanded=False):
+            st.markdown(
+                "| Verdict | Meaning |\n"
+                "|---|---|\n"
+                "| 🟢 **STRONG evidence** | p < 0.001 — the model very likely saw this data |\n"
+                "| 🟡 **MODERATE** | p < 0.05 — meaningful signal; bigger sample = more certain |\n"
+                "| ⚪ **NO evidence** | Either it didn't train on this, *or* your sample is too small |\n"
+            )
+    with demo_col:
+        st.caption(
+            "💡 The hosted demo runs Pythia-160m on CPU — usually returns "
+            "NO evidence. For our headline **p = 4.5 × 10⁻⁵** result, run on GPU "
+            "(see the README)."
+        )
+
+    with st.expander("⚙️ Advanced settings", expanded=False):
+        st.caption(
+            "Defaults work for the example. Change these only if you're "
+            "running on GPU or trying a different model."
+        )
         model_name = st.selectbox(
             "Audited model (HuggingFace)",
             [
@@ -539,11 +607,10 @@ with tab_text:
         batch_size = st.slider("Batch size", 1, 16, 4, key="text_batch_size")
 
         st.divider()
-        st.markdown(
-            "**Corpus requirements**  \n"
-            "• Suspect: ≥ 50 passages recommended  \n"
-            "• Control: must be ≥ 2× suspect size  \n"
-            "• File formats: `.txt` (one passage per line) or `.jsonl` with a `text` field"
+        st.caption(
+            "**File formats:** `.txt` (one passage per line) or "
+            "`.jsonl` with a `text` field. **Suspect:** ≥ 50 passages. "
+            "**Control:** ≥ 2× suspect size."
         )
 
     example_suspect = EXAMPLES_DIR / "pile_wikipedia_suspect.jsonl"
@@ -682,16 +749,24 @@ with tab_text:
 # ══════════════════════════════════════════════════════════════════════
 
 with tab_audio:
-    st.info(
-        "**Audio tab — Track A (gray-box MIA on MusicGen).** Click the "
-        "**'Load audio example'** button below to see a pre-computed "
-        "report instantly. Live MusicGen inference on the hosted CPU "
-        "takes 5-10 min — recommended only if you want to try your own "
-        "clips. For the headline Phase B result (p<0.01 after fine-tune), "
-        "see the GitHub README — that runs on Modal A10G (~$30). "
-        "We also have **Track B (canary/data-poisoning)** for closed "
-        "models like Suno/Udio — see `canary_prototype/` in the repo."
+    st.markdown("### Was my music used to train MusicGen?")
+    st.markdown(
+        "Upload audio clips you suspect a music model trained on, plus similar "
+        "clips you're certain it didn't. We'll score how confident we are. "
+        "Click **Load audio example** to see a finished report instantly."
     )
+
+    with st.expander("How to read the verdict", expanded=False):
+        st.markdown(
+            "| Verdict | Meaning |\n"
+            "|---|---|\n"
+            "| 🟢 **STRONG evidence** | p < 0.001 — the model very likely saw this audio |\n"
+            "| 🟡 **MODERATE** | p < 0.05 — meaningful signal; bigger corpus = more certain |\n"
+            "| ⚪ **NO evidence** | Either no leak, or sample too small / model not memorizing |\n\n"
+            "_The hosted CPU demo can show a pre-computed null example. "
+            "Our real-model experiment hit **p = 9.2 × 10⁻¹³** — see the "
+            "[README](https://github.com/Yikai-Cao/influence-ai-demo) for the GPU run._"
+        )
 
     audio_example_report_path = APP_DIR / "examples" / "audio_demo_report.json"
     audio_example_suspect_dir = APP_DIR / "examples" / "audio_demo_suspect"
@@ -902,15 +977,26 @@ with tab_audio:
 # ══════════════════════════════════════════════════════════════════════
 
 with tab_canary:
-    st.info(
-        "**Plan B — canary detection for closed black-box models** "
-        "(Suno, Udio, ElevenLabs). The audit MIA on the other two tabs "
-        "needs gray-box log-probabilities, which closed audio models "
-        "don't expose. Canarying is the workaround: register a private "
-        "library of distinctive motifs, mix them imperceptibly into "
-        "your unreleased catalog, then later scan suspect model outputs "
-        "for any of the planted canaries. Pure-CPU; runs on this demo."
+    st.markdown("### Catch leaks of unreleased music")
+    st.markdown(
+        "Before you release a track, hide an inaudible **canary** in it. "
+        "If a closed AI model (Suno, Udio, ElevenLabs) later trains on your "
+        "track and regurgitates it, this tab can detect it. Real-model "
+        "validated at **p = 3 × 10⁻⁵**."
     )
+
+    with st.expander("Why this exists (and what it can't do)", expanded=False):
+        st.markdown(
+            "**Why a watermark, not a check?** Closed APIs (Suno, Udio) don't "
+            "expose the internals our other tabs need. So instead of asking "
+            "the model questions, we plant a tag in the audio first.\n\n"
+            "**Limits we're honest about:**\n"
+            "- Only protects **unreleased** music. Already-public songs can't "
+            "be retroactively watermarked.\n"
+            "- Detection needs the AI to actually generate output containing "
+            "your canary — typically several hundred sample outputs to be sure.\n"
+            "- A determined adversary who notices the canary can filter it out.\n"
+        )
 
     canary_deps_ok = True
     try:
@@ -920,14 +1006,16 @@ with tab_canary:
         canary_deps_ok = False
         st.error("Audio deps missing on this host — `pip install librosa soundfile`.")
 
+    st.markdown("**Three steps. Do them in order.**")
     canary_mode = st.radio(
         "Step:",
         [
-            "1️⃣ Generate library",
-            "2️⃣ Embed in track",
-            "3️⃣ Scan suspect outputs",
+            "1️⃣ Make your private canary library",
+            "2️⃣ Hide canaries in your track",
+            "3️⃣ Scan AI outputs for leaks",
         ],
         horizontal=True,
+        label_visibility="collapsed",
         key="canary_mode",
     )
 
