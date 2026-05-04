@@ -311,24 +311,33 @@ def _make_example_suspect_set(
 
     out: list[tuple[str, bytes]] = []
 
-    # Leaked clips: pick a random canary, mix at high gain into a host,
-    # then codec-degrade. This is the synthetic memorization-leak case.
+    # Leaked clips: plant TWO canaries per leaked output (each at a
+    # different time offset, both with high gain). With 1 canary per
+    # clip the binomial test on a default-size library doesn't cross
+    # significance threshold for a 3-leaked-3-clean set; 2 canaries
+    # per clip gives enough hits to fire STRONG even with small libs.
+    canaries_per_leak = min(2, len(library_canaries))
     for i in range(n_leaked):
-        chosen = rng_picker.choice(library_canaries)
-        canary_audio, c_sr = sf.read(chosen["path"], dtype="float32",
-                                      always_2d=False)
-        if canary_audio.ndim == 2:
-            canary_audio = canary_audio.mean(axis=1)
         host = _get_host(idx=i, fallback_seed=200 + i)
-        # Mix the canary into a random offset, replacing the host there
-        leak_offset = rng_picker.uniform(0.5, clip_seconds - 4.0)
-        leak_gain = rng_picker.uniform(0.5, 0.85)
-        start = int(leak_offset * sr)
-        end = min(start + len(canary_audio), clip_n)
-        host[start:end] = (
-            leak_gain * canary_audio[:end - start]
-            + 0.15 * host[start:end]
-        )
+        # Spread the canary plants across non-overlapping time windows
+        # of the host, so there's room for two 3 s canaries plus margin.
+        for slot in range(canaries_per_leak):
+            chosen = rng_picker.choice(library_canaries)
+            canary_audio, c_sr = sf.read(chosen["path"], dtype="float32",
+                                          always_2d=False)
+            if canary_audio.ndim == 2:
+                canary_audio = canary_audio.mean(axis=1)
+            # First canary at 0.3-1.5 s, second at 3.5-4.5 s (clips are 6 s)
+            slot_lo = 0.3 if slot == 0 else 3.3
+            slot_hi = 1.5 if slot == 0 else 4.7
+            leak_offset = rng_picker.uniform(slot_lo, slot_hi)
+            leak_gain = rng_picker.uniform(0.6, 0.85)
+            start = int(leak_offset * sr)
+            end = min(start + len(canary_audio), clip_n)
+            host[start:end] = (
+                leak_gain * canary_audio[:end - start]
+                + 0.15 * host[start:end]
+            )
         host = _codec(host, c_seed=300 + i)
         buf = io.BytesIO()
         sf.write(buf, host, sr, format="WAV")
@@ -1380,47 +1389,57 @@ with tab_canary:
     # ── Mode 3 — Scan suspect outputs ────────────────────────────────────
 
     else:
-        st.markdown("### Scan suspect model outputs for leaks")
+        st.markdown("### Scan AI outputs for leaks")
         st.caption(
-            "Detection runs the canary library against suspect audio (every "
-            "canary × every clip), counts hits above threshold, then runs a "
-            "statistical test. The verdict you get depends on what "
-            "embedding mode you used in Step 2."
+            "Detection runs the canary library against suspect audio "
+            "(every canary × every clip), counts hits above threshold, "
+            "then runs a statistical test."
         )
 
-        # ── Real-model results section ──────────────────────────────────
+        # ════════════════════════════════════════════════════════════════
+        # SECTION A: Pre-computed real-model results + live demo
+        # ════════════════════════════════════════════════════════════════
+        st.markdown("## 📊 See a finished detection report")
+        st.caption(
+            "Three demos showing what the detector returns. Pick any to "
+            "expand; click again to dismiss."
+        )
+
         realmodel_demo_path = APP_DIR / "examples" / "canary_realmodel_demo.json"
         persong_real_path = APP_DIR / "examples" / "canary_persong_realmodel_demo.json"
 
-        st.markdown("#### 🎯 Real-model experiment results")
-        st.caption(
-            "Two pre-computed reports from MusicGen-small fine-tune "
-            "experiments — click either to see how each embedding mode's "
-            "detection plays out."
-        )
-        rm_col1, rm_col2 = st.columns(2)
+        rm_col1, rm_col2, rm_col3 = st.columns(3)
         with rm_col1:
-            st.markdown("**Corpus-level**")
-            st.caption("100 songs, shared canary library (v2)")
+            st.markdown("**🎯 Corpus-level**  \nReal MusicGen, 100 songs")
             show_realmodel = st.button(
-                "🎯 Show corpus-level result",
+                "Show result",
                 help="canary_v2_loud: 100 host clips × shared 30-canary "
-                     "library. Detector returns a single corpus-level "
-                     "p-value: 'some song from your catalog leaked'.",
+                     "library on real fine-tuned MusicGen-small. Returns "
+                     "a corpus-level p-value: 'some song leaked'.",
                 disabled=not realmodel_demo_path.exists(),
                 key="canary_show_realmodel",
                 use_container_width=True,
             )
         with rm_col2:
-            st.markdown("**Per-song attribution**")
-            st.caption("30 songs, unique canary fingerprint per song (v4)")
+            st.markdown("**🆔 Per-song**  \nReal MusicGen, 30 songs")
             show_persong_real = st.button(
-                "🆔 Show per-song result",
+                "Show result",
                 help="canary_v4_persong: 30 host clips × 3 unique canaries "
-                     "each (disjoint allocation). Detector identifies "
+                     "each on real fine-tuned MusicGen-small. Identifies "
                      "*which specific song* each leak came from.",
                 disabled=not persong_real_path.exists(),
                 key="canary_show_persong_real",
+                use_container_width=True,
+            )
+        with rm_col3:
+            st.markdown("**▶ Live demo**  \nIn-browser, ~20 s")
+            run_persong_demo = st.button(
+                "Run live",
+                help="In-browser per-song demo: synthesize a small library "
+                     "+ 6 host songs, embed, simulate 2 leaks, scan, attribute. "
+                     "All runs on this CPU.",
+                disabled=not canary_deps_ok,
+                key="canary_persong_demo_btn",
                 use_container_width=True,
             )
         if show_realmodel:
@@ -1552,20 +1571,7 @@ with tab_canary:
             with st.expander("Experiment config", expanded=False):
                 st.json(cfg)
 
-        st.markdown("---")
-
-        # ── Live in-browser per-song demo ───────────────────────────────
-        st.markdown("#### ▶ Try the per-song flow live (in-browser)")
-        st.caption(
-            "Synthesizes a small library + 6 host songs, embeds with unique "
-            "canary fingerprints, simulates 2 leaks, runs the detector, "
-            "shows which source songs were attributed. ~20 seconds, all CPU."
-        )
-        run_persong_demo = st.button(
-            "▶ Run per-song demo",
-            disabled=not canary_deps_ok,
-            key="canary_persong_demo_btn",
-        )
+        # Live demo run logic (button defined in the 3-column section above).
         if run_persong_demo:
             with st.status("Running per-song demo…", expanded=True) as status:
                 import random as _r
@@ -1741,9 +1747,16 @@ with tab_canary:
                 st.json(r["master_assignments"])
 
         st.markdown("---")
+
+        # ════════════════════════════════════════════════════════════════
+        # SECTION B: Scan your own outputs (the actual workflow)
+        # ════════════════════════════════════════════════════════════════
+        st.markdown("## 🔬 Scan your own outputs")
         st.caption(
-            "Or **scan your own outputs** below — bring a canary library "
-            "from Step 1 plus suspect audio from any source."
+            "Bring a canary library from Step 1 + suspect audio from any "
+            "source (e.g., a generative model's output). The detector "
+            "computes similarity for every (canary × suspect) pair, then "
+            "binomial-tests the count of pairs above threshold."
         )
 
         lib_source = st.radio(
@@ -1776,7 +1789,7 @@ with tab_canary:
         ex_col_a, ex_col_b = st.columns([1, 3])
         with ex_col_a:
             if st.button("🎯 Use example outputs",
-                          help="Generate 3 leaked + 3 clean suspect clips "
+                          help="Generate 4 leaked + 4 clean suspect clips "
                                "from the loaded library, with codec "
                                "compression applied. Lets you see what "
                                "the detector says on a known ground-truth "
@@ -1786,7 +1799,7 @@ with tab_canary:
                           key="canary_scan_example_btn"):
                 with st.spinner("Synthesizing example suspect outputs…"):
                     blobs, attribution = _make_example_suspect_set(
-                        lib_zip_bytes, n_leaked=3, n_clean=3, seed=7,
+                        lib_zip_bytes, n_leaked=4, n_clean=4, seed=7,
                     )
                     st.session_state["canary_example_suspect_blobs"] = blobs
                     st.session_state["canary_example_suspect_attribution"] = attribution
@@ -1800,7 +1813,7 @@ with tab_canary:
                 )
                 st.caption(
                     f"📎 {len(names)} clips loaded "
-                    f"(3 leaked + 3 clean). {attr} "
+                    f"(4 leaked + 4 clean). {attr} "
                     "Upload your own files to override."
                 )
 
