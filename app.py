@@ -1408,11 +1408,21 @@ with tab_canary:
         realmodel_demo_path = APP_DIR / "examples" / "canary_realmodel_demo.json"
         persong_real_path = APP_DIR / "examples" / "canary_persong_realmodel_demo.json"
 
+        # Each "show" button toggles its result panel (click again to hide).
+        realmodel_open = st.session_state.get("canary_realmodel_loaded", False)
+        persong_open = st.session_state.get("persong_real_loaded", False)
+        # The live demo's "open" state is whether a demo result exists in
+        # session — we track via a separate flag so we can hide the panel
+        # without throwing away the cached result.
+        livedemo_has_result = "persong_demo_result" in st.session_state
+        livedemo_open = (st.session_state.get("persong_demo_open", False)
+                         and livedemo_has_result)
+
         rm_col1, rm_col2, rm_col3 = st.columns(3)
         with rm_col1:
             st.markdown("**🎯 Corpus-level**  \nReal MusicGen, 100 songs")
             show_realmodel = st.button(
-                "Show result",
+                "Hide result" if realmodel_open else "Show result",
                 help="canary_v2_loud: 100 host clips × shared 30-canary "
                      "library on real fine-tuned MusicGen-small. Returns "
                      "a corpus-level p-value: 'some song leaked'.",
@@ -1423,7 +1433,7 @@ with tab_canary:
         with rm_col2:
             st.markdown("**🆔 Per-song**  \nReal MusicGen, 30 songs")
             show_persong_real = st.button(
-                "Show result",
+                "Hide result" if persong_open else "Show result",
                 help="canary_v4_persong: 30 host clips × 3 unique canaries "
                      "each on real fine-tuned MusicGen-small. Identifies "
                      "*which specific song* each leak came from.",
@@ -1433,8 +1443,12 @@ with tab_canary:
             )
         with rm_col3:
             st.markdown("**▶ Live demo**  \nIn-browser, ~20 s")
-            run_persong_demo = st.button(
-                "Run live",
+            if livedemo_has_result:
+                live_label = "Hide result" if livedemo_open else "Show result"
+            else:
+                live_label = "Run live"
+            run_persong_demo_btn = st.button(
+                live_label,
                 help="In-browser per-song demo: synthesize a small library "
                      "+ 6 host songs, embed, simulate 2 leaks, scan, attribute. "
                      "All runs on this CPU.",
@@ -1442,10 +1456,22 @@ with tab_canary:
                 key="canary_persong_demo_btn",
                 use_container_width=True,
             )
+        # Apply toggles
         if show_realmodel:
-            st.session_state["canary_realmodel_loaded"] = True
+            st.session_state["canary_realmodel_loaded"] = not realmodel_open
+            st.rerun()
         if show_persong_real:
-            st.session_state["persong_real_loaded"] = True
+            st.session_state["persong_real_loaded"] = not persong_open
+            st.rerun()
+        # Live-demo button: 3 cases — first click runs, later clicks toggle.
+        run_persong_demo = False
+        if run_persong_demo_btn:
+            if not livedemo_has_result:
+                run_persong_demo = True   # trigger the run below
+            else:
+                # toggle hide/show without losing cached result
+                st.session_state["persong_demo_open"] = not livedemo_open
+                st.rerun()
 
         if realmodel_demo_path.exists() and st.session_state.get("canary_realmodel_loaded"):
             demo = json.loads(realmodel_demo_path.read_text())
@@ -1691,9 +1717,12 @@ with tab_canary:
                         Path(k).name: v for k, v in master["assignments"].items()
                     },
                 }
+                # Mark the panel as open after a fresh run; subsequent
+                # button clicks toggle this flag.
+                st.session_state["persong_demo_open"] = True
                 status.update(label="Per-song demo complete", state="complete")
 
-        if "persong_demo_result" in st.session_state:
+        if "persong_demo_result" in st.session_state and st.session_state.get("persong_demo_open"):
             r = st.session_state["persong_demo_result"]
             attr = r["attribution"]
             gt = set(r["ground_truth_leaked"])
