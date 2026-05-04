@@ -233,7 +233,12 @@ def embed(
     # of CWD (local CLI, Modal mount, etc). _resolve_canary_paths is the
     # single source of truth for the layout convention (files are siblings
     # of the index file).
-    from canary_detector import _resolve_canary_paths
+    # Import works both as a package member (canary.canary_embedder)
+    # and as a standalone CLI invocation in canary_prototype/.
+    try:
+        from .canary_detector import _resolve_canary_paths
+    except ImportError:
+        from canary_detector import _resolve_canary_paths
     _resolve_canary_paths(canary_index, canary_index_path)
 
     host, host_sr = _load_audio(host_path, target_sr=library_sr)

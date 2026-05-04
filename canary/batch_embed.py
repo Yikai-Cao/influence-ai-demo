@@ -68,8 +68,14 @@ def batch_embed(
 
     Returns the master manifest dict.
     """
-    from canary_assigner import assign_unique, assign_combinatorial
-    from canary_embedder import embed
+    # Import works both as a package member (canary.batch_embed) and
+    # as a standalone CLI invocation in canary_prototype/.
+    try:
+        from .canary_assigner import assign_unique, assign_combinatorial
+        from .canary_embedder import embed
+    except ImportError:
+        from canary_assigner import assign_unique, assign_combinatorial
+        from canary_embedder import embed
 
     canary_index = json.loads(canary_index_path.read_text())
 
