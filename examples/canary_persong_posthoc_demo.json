@@ -1,0 +1,70 @@
+{
+  "experiment": "canary_v2_loud (post-hoc per-song attribution)",
+  "description": "v2 was designed for corpus-level detection (100 songs sharing a 30-logical-canary library \u2014 each canary appears in ~10 songs). Even with that overlap, post-hoc per-song attribution on the v2 fine-tuned MusicGen outputs uniquely identifies one source song with zero false positives in the base control. A purpose-built per-song run (assign_unique mode, library \u2265 N_songs \u00d7 n_per_song) would push this much higher \u2014 see canary_v4_persong.",
+  "config": {
+    "n_songs": 100,
+    "n_logical_canaries": 30,
+    "avg_songs_per_canary": 10.0,
+    "max_songs_per_canary": 17,
+    "min_songs_per_canary": 4,
+    "n_outputs_per_set": 50,
+    "threshold": 0.55
+  },
+  "fine_tuned_attribution": {
+    "n_pairs_above_threshold": 15,
+    "n_suspects_with_hits": 6,
+    "n_uniquely_identified_source_songs": 1,
+    "uniquely_identified_songs": [
+      "000255.mp3"
+    ],
+    "per_suspect_table": [
+      {
+        "suspect_clip": "ft_0040.wav",
+        "uniquely_identified": false,
+        "top_candidate_song": "000005.mp3",
+        "logical_canaries_hit": 1,
+        "candidate_count": 14
+      },
+      {
+        "suspect_clip": "ft_0010.wav",
+        "uniquely_identified": true,
+        "top_candidate_song": "000255.mp3",
+        "logical_canaries_hit": 2,
+        "candidate_count": 23
+      },
+      {
+        "suspect_clip": "ft_0046.wav",
+        "uniquely_identified": false,
+        "top_candidate_song": "000197.mp3",
+        "logical_canaries_hit": 1,
+        "candidate_count": 9
+      },
+      {
+        "suspect_clip": "ft_0012.wav",
+        "uniquely_identified": false,
+        "top_candidate_song": "000190.mp3",
+        "logical_canaries_hit": 1,
+        "candidate_count": 8
+      },
+      {
+        "suspect_clip": "ft_0035.wav",
+        "uniquely_identified": false,
+        "top_candidate_song": "000615.mp3",
+        "logical_canaries_hit": 1,
+        "candidate_count": 8
+      },
+      {
+        "suspect_clip": "ft_0024.wav",
+        "uniquely_identified": false,
+        "top_candidate_song": "000190.mp3",
+        "logical_canaries_hit": 1,
+        "candidate_count": 8
+      }
+    ]
+  },
+  "base_attribution": {
+    "n_pairs_above_threshold": 0,
+    "n_suspects_with_hits": 0,
+    "n_uniquely_identified_source_songs": 0
+  }
+}

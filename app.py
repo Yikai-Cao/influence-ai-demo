@@ -1655,11 +1655,104 @@ with tab_canary:
                     st.json(demo["config"])
                 with st.expander("Raw report JSON", expanded=False):
                     st.json(demo)
+
+        # ── Per-song attribution on real-model data ─────────────────
+        persong_posthoc_path = APP_DIR / "examples" / "canary_persong_posthoc_demo.json"
+        if persong_posthoc_path.exists():
             st.markdown("---")
-            st.caption(
-                "Or **scan your own outputs** below — bring a canary library "
-                "from Step 1 plus suspect audio from any source."
-            )
+            ps_col1, ps_col2 = st.columns([1, 3])
+            with ps_col1:
+                show_persong_real = st.button(
+                    "🆔 Show per-song attribution",
+                    help="Post-hoc per-song attribution analysis on the v2 "
+                         "real-model fine-tuned MusicGen outputs. "
+                         "Demonstrates that even with a sub-optimal corpus-"
+                         "level setup, attribution still uniquely identifies "
+                         "specific source songs with zero false positives.",
+                    key="canary_show_persong_real",
+                )
+            with ps_col2:
+                st.caption(
+                    "**Per-song attribution on real model** — does the canary "
+                    "system tell you *which song* was leaked, or only that *some* "
+                    "song was? Run on today's MusicGen outputs to see."
+                )
+            if show_persong_real:
+                st.session_state["persong_real_loaded"] = True
+
+            if st.session_state.get("persong_real_loaded"):
+                pdemo = json.loads(persong_posthoc_path.read_text())
+                st.markdown("#### 🆔 Per-song attribution on v2 real-model outputs")
+                st.caption(pdemo["description"])
+
+                ft = pdemo["fine_tuned_attribution"]
+                base = pdemo["base_attribution"]
+                cfg = pdemo["config"]
+
+                if ft["n_uniquely_identified_source_songs"] >= 1 and base["n_uniquely_identified_source_songs"] == 0:
+                    st.success(
+                        f"✅ **{ft['n_uniquely_identified_source_songs']} source song "
+                        f"uniquely identified** in fine-tuned outputs, "
+                        f"**{base['n_uniquely_identified_source_songs']} false positives** "
+                        "in base control."
+                    )
+                else:
+                    st.info(
+                        f"FT uniquely identified: {ft['n_uniquely_identified_source_songs']}  ·  "
+                        f"Base: {base['n_uniquely_identified_source_songs']}"
+                    )
+
+                st.markdown(
+                    f"_**Why this is partial:** v2 used a 30-logical-canary library "
+                    f"shared across {cfg['n_songs']} songs (each canary appears in "
+                    f"~{cfg['avg_songs_per_canary']:.0f} songs). A purpose-built "
+                    f"per-song run with `assign_unique` mode "
+                    f"(library ≥ N_songs × n_per_song) targets ~100% unique "
+                    f"identification. See canary_v4_persong._"
+                )
+
+                p1, p2, p3 = st.columns(3)
+                p1.metric("Suspects with hits", ft["n_suspects_with_hits"])
+                p2.metric("Uniquely identified",
+                           ft["n_uniquely_identified_source_songs"])
+                p3.metric("Base false positives",
+                           base["n_uniquely_identified_source_songs"])
+
+                with st.expander("Per-suspect attribution table", expanded=True):
+                    import pandas as pd
+                    df = pd.DataFrame(ft["per_suspect_table"])
+                    if not df.empty:
+                        df["uniquely identified"] = df["uniquely_identified"].map(
+                            lambda b: "✅" if b else "—"
+                        )
+                        df = df[[
+                            "suspect_clip", "uniquely identified",
+                            "top_candidate_song", "logical_canaries_hit",
+                            "candidate_count",
+                        ]].rename(columns={
+                            "suspect_clip": "suspect",
+                            "top_candidate_song": "top candidate",
+                            "logical_canaries_hit": "logical hits",
+                            "candidate_count": "# candidates",
+                        })
+                        st.dataframe(df, use_container_width=True)
+                    else:
+                        st.caption("No suspects above threshold.")
+
+                with st.expander("Library overlap diagnostic", expanded=False):
+                    st.markdown(
+                        f"- **Songs:** {cfg['n_songs']}\n"
+                        f"- **Logical canaries used:** {cfg['n_logical_canaries']}\n"
+                        f"- **Avg songs sharing each canary:** {cfg['avg_songs_per_canary']:.1f}\n"
+                        f"- **Range:** {cfg['min_songs_per_canary']}–{cfg['max_songs_per_canary']} "
+                        "(per-song attribution works best when this is 1 — disjoint assignment)"
+                    )
+
+        st.markdown("---")
+        st.caption(
+            "Or **scan your own outputs** below — bring a canary library "
+            "from Step 1 plus suspect audio from any source."
+        )
 
         lib_source = st.radio(
             "Library source",
