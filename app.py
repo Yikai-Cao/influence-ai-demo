@@ -1657,96 +1657,100 @@ with tab_canary:
                     st.json(demo)
 
         # ── Per-song attribution on real-model data ─────────────────
-        persong_posthoc_path = APP_DIR / "examples" / "canary_persong_posthoc_demo.json"
-        if persong_posthoc_path.exists():
+        persong_real_path = APP_DIR / "examples" / "canary_persong_realmodel_demo.json"
+        if persong_real_path.exists():
             st.markdown("---")
             ps_col1, ps_col2 = st.columns([1, 3])
             with ps_col1:
                 show_persong_real = st.button(
                     "🆔 Show per-song attribution",
-                    help="Post-hoc per-song attribution analysis on the v2 "
-                         "real-model fine-tuned MusicGen outputs. "
-                         "Demonstrates that even with a sub-optimal corpus-"
-                         "level setup, attribution still uniquely identifies "
-                         "specific source songs with zero false positives.",
+                    help="Real-model per-song attribution: 30 songs × 3 unique "
+                         "canaries each. After fine-tuning MusicGen-small on "
+                         "the canaried clips, the detector can identify which "
+                         "specific source song each leaked output came from.",
                     key="canary_show_persong_real",
                 )
             with ps_col2:
                 st.caption(
                     "**Per-song attribution on real model** — does the canary "
-                    "system tell you *which song* was leaked, or only that *some* "
-                    "song was? Run on today's MusicGen outputs to see."
+                    "system tell you *which* specific song leaked, or only that "
+                    "*some* song from your catalog did? Run on today's MusicGen "
+                    "experiment to see."
                 )
             if show_persong_real:
                 st.session_state["persong_real_loaded"] = True
 
             if st.session_state.get("persong_real_loaded"):
-                pdemo = json.loads(persong_posthoc_path.read_text())
-                st.markdown("#### 🆔 Per-song attribution on v2 real-model outputs")
+                pdemo = json.loads(persong_real_path.read_text())
+                st.markdown("#### 🆔 Per-song attribution on real-model outputs")
                 st.caption(pdemo["description"])
 
-                ft = pdemo["fine_tuned_attribution"]
-                base = pdemo["base_attribution"]
                 cfg = pdemo["config"]
+                headline_thr = pdemo["headline_threshold"]
+                hr = pdemo["threshold_sweep"][headline_thr]
 
-                if ft["n_uniquely_identified_source_songs"] >= 1 and base["n_uniquely_identified_source_songs"] == 0:
+                if hr["ft_uniquely_identified_count"] >= 1 and hr["base_false_positive_count"] == 0:
                     st.success(
-                        f"✅ **{ft['n_uniquely_identified_source_songs']} source song "
-                        f"uniquely identified** in fine-tuned outputs, "
-                        f"**{base['n_uniquely_identified_source_songs']} false positives** "
-                        "in base control."
+                        f"✅ **{hr['ft_uniquely_identified_count']} source song(s) "
+                        f"uniquely identified** in fine-tuned outputs (threshold "
+                        f"{headline_thr}), **0 false positives** in base control."
                     )
                 else:
                     st.info(
-                        f"FT uniquely identified: {ft['n_uniquely_identified_source_songs']}  ·  "
-                        f"Base: {base['n_uniquely_identified_source_songs']}"
+                        f"At threshold {headline_thr}: FT unique = "
+                        f"{hr['ft_uniquely_identified_count']}, "
+                        f"base FP = {hr['base_false_positive_count']}"
                     )
-
-                st.markdown(
-                    f"_**Why this is partial:** v2 used a 30-logical-canary library "
-                    f"shared across {cfg['n_songs']} songs (each canary appears in "
-                    f"~{cfg['avg_songs_per_canary']:.0f} songs). A purpose-built "
-                    f"per-song run with `assign_unique` mode "
-                    f"(library ≥ N_songs × n_per_song) targets ~100% unique "
-                    f"identification. See canary_v4_persong._"
-                )
 
                 p1, p2, p3 = st.columns(3)
-                p1.metric("Suspects with hits", ft["n_suspects_with_hits"])
-                p2.metric("Uniquely identified",
-                           ft["n_uniquely_identified_source_songs"])
+                p1.metric("Total ft hits", hr["ft_total_hits"])
+                p2.metric("Uniquely identified songs",
+                           hr["ft_uniquely_identified_count"])
                 p3.metric("Base false positives",
-                           base["n_uniquely_identified_source_songs"])
+                           hr["base_false_positive_count"])
 
-                with st.expander("Per-suspect attribution table", expanded=True):
+                st.markdown(
+                    f"**Identified source songs:** "
+                    + ", ".join(f"`{s}`" for s in hr["ft_uniquely_identified_songs"])
+                    if hr["ft_uniquely_identified_songs"]
+                    else "**Identified source songs:** none at this threshold"
+                )
+
+                with st.expander("Threshold sweep (signal vs noise tradeoff)",
+                                  expanded=True):
                     import pandas as pd
-                    df = pd.DataFrame(ft["per_suspect_table"])
-                    if not df.empty:
-                        df["uniquely identified"] = df["uniquely_identified"].map(
-                            lambda b: "✅" if b else "—"
-                        )
-                        df = df[[
-                            "suspect_clip", "uniquely identified",
-                            "top_candidate_song", "logical_canaries_hit",
-                            "candidate_count",
-                        ]].rename(columns={
-                            "suspect_clip": "suspect",
-                            "top_candidate_song": "top candidate",
-                            "logical_canaries_hit": "logical hits",
-                            "candidate_count": "# candidates",
+                    sweep_rows = []
+                    for thr, r in pdemo["threshold_sweep"].items():
+                        sweep_rows.append({
+                            "threshold": thr,
+                            "ft hits": r["ft_total_hits"],
+                            "base hits": r["base_total_hits"],
+                            "ft unique songs": r["ft_uniquely_identified_count"],
+                            "base false positives": r["base_false_positive_count"],
                         })
-                        st.dataframe(df, use_container_width=True)
-                    else:
-                        st.caption("No suspects above threshold.")
-
-                with st.expander("Library overlap diagnostic", expanded=False):
-                    st.markdown(
-                        f"- **Songs:** {cfg['n_songs']}\n"
-                        f"- **Logical canaries used:** {cfg['n_logical_canaries']}\n"
-                        f"- **Avg songs sharing each canary:** {cfg['avg_songs_per_canary']:.1f}\n"
-                        f"- **Range:** {cfg['min_songs_per_canary']}–{cfg['max_songs_per_canary']} "
-                        "(per-song attribution works best when this is 1 — disjoint assignment)"
+                    st.dataframe(pd.DataFrame(sweep_rows), use_container_width=True)
+                    st.caption(
+                        "Higher thresholds reduce noise (fewer base false "
+                        "positives) at the cost of recall. 0.58 is the cleanest "
+                        "operating point for this run."
                     )
+
+                with st.expander("Per-suspect attribution at headline threshold",
+                                  expanded=False):
+                    import pandas as pd
+                    rows = []
+                    for r in hr["ft_per_suspect"]:
+                        cands = r.get("owned_candidates", [])
+                        rows.append({
+                            "suspect": r["suspect"],
+                            "uniquely identified": "✅" if r["uniquely_identified"] else "—",
+                            "candidate(s)": ", ".join(cands) if cands else "(unowned)",
+                            "n hits": r["n_hits"],
+                        })
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+                with st.expander("Experiment config", expanded=False):
+                    st.json(cfg)
 
         st.markdown("---")
         st.caption(

@@ -1,0 +1,198 @@
+{
+  "experiment": "canary_v4_persong (purpose-built per-song attribution)",
+  "description": "Real-model per-song attribution on MusicGen-small with disjoint canary allocation (assign_unique mode). 30 host clips \u00d7 3 logical canaries each = 90 unique canaries from a 100-logical library. LoRA r=32, lr=5e-4, 60 epochs, -3 dB embed. Each canary belongs to exactly one source song, so a hit identifies the source.",
+  "config": {
+    "n_songs": 30,
+    "n_per_song": 3,
+    "library_size": 300,
+    "mode": "unique",
+    "n_outputs_per_set": 50,
+    "embed_gain_db": -3,
+    "epochs": 60,
+    "lora_r": 32
+  },
+  "threshold_sweep": {
+    "0.55": {
+      "ft_total_hits": 37,
+      "base_total_hits": 8,
+      "ft_uniquely_identified_count": 4,
+      "ft_uniquely_identified_songs": [
+        "000005.mp3",
+        "000010.mp3",
+        "000210.mp3",
+        "000546.mp3"
+      ],
+      "base_false_positive_count": 2,
+      "base_false_positive_songs": [
+        "000210.mp3",
+        "000424.mp3"
+      ],
+      "ft_per_suspect": [
+        {
+          "suspect": "ft_0004.wav",
+          "uniquely_identified": true,
+          "owned_candidates": [
+            "000005.mp3"
+          ],
+          "n_hits": 1
+        },
+        {
+          "suspect": "ft_0012.wav",
+          "uniquely_identified": false,
+          "owned_candidates": [],
+          "n_hits": 1
+        },
+        {
+          "suspect": "ft_0013.wav",
+          "uniquely_identified": true,
+          "owned_candidates": [
+            "000005.mp3"
+          ],
+          "n_hits": 2
+        },
+        {
+          "suspect": "ft_0014.wav",
+          "uniquely_identified": true,
+          "owned_candidates": [
+            "000210.mp3"
+          ],
+          "n_hits": 2
+        },
+        {
+          "suspect": "ft_0018.wav",
+          "uniquely_identified": true,
+          "owned_candidates": [
+            "000010.mp3"
+          ],
+          "n_hits": 1
+        },
+        {
+          "suspect": "ft_0025.wav",
+          "uniquely_identified": true,
+          "owned_candidates": [
+            "000005.mp3"
+          ],
+          "n_hits": 1
+        },
+        {
+          "suspect": "ft_0028.wav",
+          "uniquely_identified": false,
+          "owned_candidates": [
+            "000424.mp3",
+            "000207.mp3"
+          ],
+          "n_hits": 4
+        },
+        {
+          "suspect": "ft_0034.wav",
+          "uniquely_identified": false,
+          "owned_candidates": [
+            "000546.mp3",
+            "000005.mp3"
+          ],
+          "n_hits": 2
+        },
+        {
+          "suspect": "ft_0042.wav",
+          "uniquely_identified": true,
+          "owned_candidates": [
+            "000546.mp3"
+          ],
+          "n_hits": 3
+        },
+        {
+          "suspect": "ft_0043.wav",
+          "uniquely_identified": true,
+          "owned_candidates": [
+            "000005.mp3"
+          ],
+          "n_hits": 2
+        },
+        {
+          "suspect": "ft_0048.wav",
+          "uniquely_identified": true,
+          "owned_candidates": [
+            "000010.mp3"
+          ],
+          "n_hits": 1
+        }
+      ]
+    },
+    "0.58": {
+      "ft_total_hits": 5,
+      "base_total_hits": 0,
+      "ft_uniquely_identified_count": 3,
+      "ft_uniquely_identified_songs": [
+        "000005.mp3",
+        "000010.mp3",
+        "000207.mp3"
+      ],
+      "base_false_positive_count": 0,
+      "base_false_positive_songs": [],
+      "ft_per_suspect": [
+        {
+          "suspect": "ft_0004.wav",
+          "uniquely_identified": true,
+          "owned_candidates": [
+            "000005.mp3"
+          ],
+          "n_hits": 1
+        },
+        {
+          "suspect": "ft_0018.wav",
+          "uniquely_identified": true,
+          "owned_candidates": [
+            "000010.mp3"
+          ],
+          "n_hits": 1
+        },
+        {
+          "suspect": "ft_0028.wav",
+          "uniquely_identified": true,
+          "owned_candidates": [
+            "000207.mp3"
+          ],
+          "n_hits": 2
+        },
+        {
+          "suspect": "ft_0034.wav",
+          "uniquely_identified": true,
+          "owned_candidates": [
+            "000005.mp3"
+          ],
+          "n_hits": 1
+        }
+      ]
+    },
+    "0.60": {
+      "ft_total_hits": 2,
+      "base_total_hits": 0,
+      "ft_uniquely_identified_count": 2,
+      "ft_uniquely_identified_songs": [
+        "000005.mp3",
+        "000207.mp3"
+      ],
+      "base_false_positive_count": 0,
+      "base_false_positive_songs": [],
+      "ft_per_suspect": [
+        {
+          "suspect": "ft_0028.wav",
+          "uniquely_identified": true,
+          "owned_candidates": [
+            "000207.mp3"
+          ],
+          "n_hits": 1
+        },
+        {
+          "suspect": "ft_0034.wav",
+          "uniquely_identified": true,
+          "owned_candidates": [
+            "000005.mp3"
+          ],
+          "n_hits": 1
+        }
+      ]
+    }
+  },
+  "headline_threshold": "0.58"
+}
