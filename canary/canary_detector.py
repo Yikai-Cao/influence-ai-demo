@@ -183,6 +183,24 @@ def collect_suspect_paths(suspect_dir: Path) -> list[Path]:
                   if p.is_file() and p.suffix.lower() in exts)
 
 
+def _resolve_canary_paths(canary_index: dict, index_path: Path) -> dict:
+    """Rewrite each canary's `path` to point at the file living next to
+    the index.
+
+    Canary .wav files are written as siblings of canary_index.json by
+    canary_generator.generate_library(). The index stores either a path
+    like 'canaries/canary_000.wav' (relative to gen-time CWD) or a bare
+    'canary_000.wav'. Either way, the actual file is `index_path.parent /
+    basename`. We always use that, ignoring stored directory components.
+
+    Mutates and returns the same dict for chainability.
+    """
+    root = index_path.resolve().parent
+    for c in canary_index["canaries"]:
+        c["path"] = str(root / Path(c["path"]).name)
+    return canary_index
+
+
 def detect(
     canary_index: dict,
     suspect_paths: list[Path],
@@ -193,10 +211,19 @@ def detect(
     """Score every (canary, suspect_clip) pair, count crossings, binomial-test."""
     from scipy import stats as scstats
 
-    # Load canaries once
+    # Load canaries once. If the index stores paths relative to its own
+    # parent dir, those paths only work when CWD == that dir. Caller may
+    # pre-resolve via _resolve_canary_paths(); if not, do a best-effort
+    # resolution against any path that doesn't exist as-is.
     canary_feats: dict[str, np.ndarray] = {}
     for c in canary_index["canaries"]:
         path = Path(c["path"])
+        if not path.exists() and not path.is_absolute():
+            # Relative path that doesn't resolve from CWD — caller forgot
+            # to call _resolve_canary_paths(). Skip silently rather than
+            # crash, so partial libraries still score what they can.
+            print(f"[detect] WARN canary not found: {path} — skipping")
+            continue
         samples = load_audio_mono(path, target_sr=sample_rate)
         canary_feats[c["canary_id"]] = compute_features(samples, sr=sample_rate)
 
@@ -247,6 +274,7 @@ def main():
     args = parser.parse_args()
 
     canary_index = json.loads(args.canary_index.read_text())
+    _resolve_canary_paths(canary_index, args.canary_index)
     suspect_paths = collect_suspect_paths(args.suspect_dir)
     print(f"[detect] {len(canary_index['canaries'])} canaries × "
           f"{len(suspect_paths)} suspect clips = "

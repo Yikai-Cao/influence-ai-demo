@@ -212,9 +212,16 @@ def embed(
     edge_guard_s: float = DEFAULT_EDGE_GUARD_S,
     fade_ms: int = DEFAULT_FADE_MS,
     seed: int = 0,
+    explicit_canary_ids: list[str] | None = None,
 ) -> EmbedManifest:
-    """Mix `n_canaries` from the library into `host_path`, save to `out_path`,
+    """Mix canaries from the library into `host_path`, save to `out_path`,
     and return the embedding manifest.
+
+    By default picks `n_canaries` random entries from the library
+    (deterministic given `seed`). If `explicit_canary_ids` is given,
+    uses exactly those canary entries — used by per-song attribution
+    workflows (`canary_assigner.assign_unique` etc.) to embed a
+    pre-allocated subset.
 
     `gain_db` is the canary's gain relative to the host's LOCAL RMS in the
     canary's window (not the global host RMS), so quiet sections of the
@@ -222,13 +229,30 @@ def embed(
     """
     canary_index = json.loads(canary_index_path.read_text())
     library_sr = canary_index["sample_rate"]
+    # Resolve relative/movable paths in the index so this works regardless
+    # of CWD (local CLI, Modal mount, etc). _resolve_canary_paths is the
+    # single source of truth for the layout convention (files are siblings
+    # of the index file).
+    from canary_detector import _resolve_canary_paths
+    _resolve_canary_paths(canary_index, canary_index_path)
 
     host, host_sr = _load_audio(host_path, target_sr=library_sr)
     host_n = len(host)
     if host_n == 0:
         raise ValueError(f"Empty host audio: {host_path}")
 
-    chosen = _pick_canaries(canary_index, n_canaries, seed)
+    if explicit_canary_ids is not None:
+        by_id = {c["canary_id"]: c for c in canary_index["canaries"]}
+        missing = [cid for cid in explicit_canary_ids if cid not in by_id]
+        if missing:
+            raise ValueError(
+                f"explicit_canary_ids not present in library: {missing}. "
+                "Did you pass an index from a different library?"
+            )
+        chosen = [by_id[cid] for cid in explicit_canary_ids]
+        n_canaries = len(chosen)
+    else:
+        chosen = _pick_canaries(canary_index, n_canaries, seed)
 
     # All canaries from this library are the same length (3 s default)
     first_canary_audio, _ = _load_audio(Path(chosen[0]["path"]), target_sr=library_sr)
