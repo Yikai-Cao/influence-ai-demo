@@ -1,0 +1,149 @@
+{
+  "experiment": "canary_v2_loud",
+  "description": "Real-model validation: MusicGen-small fine-tuned (LoRA r=32) on 100 canaried FMA-small clips at -3 dB embed gain for 60 epochs. 50 outputs generated from the fine-tuned model + 50 from the base (un-finetuned) model, both with FMA genre+title prompts. The canary detector scans both output sets at threshold 0.55.",
+  "config": {
+    "model": "facebook/musicgen-small + LoRA",
+    "n_canaries_logical": 30,
+    "n_canaries_total_with_transpositions": 90,
+    "n_outputs_per_set": 50,
+    "n_pairs_per_set": 4500,
+    "embed_gain_db": -3,
+    "epochs": 60,
+    "lora_r": 32,
+    "threshold": 0.55
+  },
+  "fine_tuned": {
+    "n_pairs_above_threshold": 15,
+    "verdict_default": "NO evidence of canary leakage",
+    "top_pairs": [
+      {
+        "canary_id": "canary_024",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_finetuned/ft_0040.wav",
+        "max_similarity": 0.6329245567321777,
+        "best_offset_s": 4.69
+      },
+      {
+        "canary_id": "canary_024_tp0.50",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_finetuned/ft_0040.wav",
+        "max_similarity": 0.6275663375854492,
+        "best_offset_s": 4.69
+      },
+      {
+        "canary_id": "canary_024_tm0.50",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_finetuned/ft_0040.wav",
+        "max_similarity": 0.6161869168281555,
+        "best_offset_s": 4.69
+      },
+      {
+        "canary_id": "canary_001",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_finetuned/ft_0010.wav",
+        "max_similarity": 0.5977686047554016,
+        "best_offset_s": 2.94
+      },
+      {
+        "canary_id": "canary_001_tm0.50",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_finetuned/ft_0010.wav",
+        "max_similarity": 0.5955148339271545,
+        "best_offset_s": 2.93
+      },
+      {
+        "canary_id": "canary_028_tp0.50",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_finetuned/ft_0010.wav",
+        "max_similarity": 0.5799298286437988,
+        "best_offset_s": 2.26
+      },
+      {
+        "canary_id": "canary_028",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_finetuned/ft_0010.wav",
+        "max_similarity": 0.5722694993019104,
+        "best_offset_s": 2.26
+      },
+      {
+        "canary_id": "canary_018",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_finetuned/ft_0046.wav",
+        "max_similarity": 0.571318507194519,
+        "best_offset_s": 4.66
+      },
+      {
+        "canary_id": "canary_002_tm0.50",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_finetuned/ft_0010.wav",
+        "max_similarity": 0.5689274072647095,
+        "best_offset_s": 1.39
+      },
+      {
+        "canary_id": "canary_028_tm0.50",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_finetuned/ft_0010.wav",
+        "max_similarity": 0.5646601915359497,
+        "best_offset_s": 2.21
+      }
+    ]
+  },
+  "base": {
+    "n_pairs_above_threshold": 0,
+    "verdict_default": "NO evidence of canary leakage",
+    "top_pairs": [
+      {
+        "canary_id": "canary_001_tp0.50",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_base/base_0046.wav",
+        "max_similarity": 0.5372147560119629,
+        "best_offset_s": 2.16
+      },
+      {
+        "canary_id": "canary_014_tm0.50",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_base/base_0010.wav",
+        "max_similarity": 0.5268118977546692,
+        "best_offset_s": 0.0
+      },
+      {
+        "canary_id": "canary_014",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_base/base_0010.wav",
+        "max_similarity": 0.5124288201332092,
+        "best_offset_s": 0.0
+      },
+      {
+        "canary_id": "canary_002_tm0.50",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_base/base_0013.wav",
+        "max_similarity": 0.5118020176887512,
+        "best_offset_s": 3.13
+      },
+      {
+        "canary_id": "canary_022_tp0.50",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_base/base_0010.wav",
+        "max_similarity": 0.5116208791732788,
+        "best_offset_s": 1.9
+      },
+      {
+        "canary_id": "canary_014_tm0.50",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_base/base_0015.wav",
+        "max_similarity": 0.505549430847168,
+        "best_offset_s": 4.07
+      },
+      {
+        "canary_id": "canary_013",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_base/base_0005.wav",
+        "max_similarity": 0.5046887397766113,
+        "best_offset_s": 4.62
+      },
+      {
+        "canary_id": "canary_013_tm0.50",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_base/base_0028.wav",
+        "max_similarity": 0.5045713782310486,
+        "best_offset_s": 5.93
+      },
+      {
+        "canary_id": "canary_002_tm0.50",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_base/base_0014.wav",
+        "max_similarity": 0.5042531490325928,
+        "best_offset_s": 1.0
+      },
+      {
+        "canary_id": "canary_002_tm0.50",
+        "suspect_path": "/tmp/canary_v2_loud/outputs_base/base_0048.wav",
+        "max_similarity": 0.4992923140525818,
+        "best_offset_s": 5.22
+      }
+    ]
+  },
+  "fisher_exact_p": 3.0163040525583437e-05,
+  "fisher_verdict": "STRONG evidence of canary leakage"
+}

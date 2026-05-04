@@ -1363,6 +1363,91 @@ with tab_canary:
             "calibrated null FPR. Output is a corpus-level p-value."
         )
 
+        # ── Real-model demo banner ──────────────────────────────────────
+        realmodel_demo_path = APP_DIR / "examples" / "canary_realmodel_demo.json"
+        if realmodel_demo_path.exists():
+            st.markdown("---")
+            with st.container():
+                rm_col1, rm_col2 = st.columns([1, 3])
+                with rm_col1:
+                    show_realmodel = st.button(
+                        "🎯 Show real-model result",
+                        help="Display the pre-computed canary detection "
+                             "report from our actual MusicGen-small "
+                             "fine-tune experiment (Path A, May 3 2026).",
+                        type="primary",
+                        key="canary_show_realmodel",
+                    )
+                with rm_col2:
+                    st.caption(
+                        "**Real-model validation** — we LoRA fine-tuned "
+                        "MusicGen-small on 100 canaried FMA clips, generated "
+                        "50 outputs from the fine-tuned model + 50 from the "
+                        "base model, then ran the detector. Click to see "
+                        "the result."
+                    )
+            if show_realmodel:
+                st.session_state["canary_realmodel_loaded"] = True
+
+            if st.session_state.get("canary_realmodel_loaded"):
+                demo = json.loads(realmodel_demo_path.read_text())
+                st.markdown("#### 🎯 Real-model result — `canary_v2_loud`")
+                st.caption(demo["description"])
+
+                # Headline verdict
+                p_fisher = demo["fisher_exact_p"]
+                if p_fisher < 0.001:
+                    badge = "🟢 :red[**STRONG evidence of canary leakage**]"
+                elif p_fisher < 0.05:
+                    badge = "🟡 :orange[**MODERATE evidence**]"
+                else:
+                    badge = "⚪ **NO evidence**"
+                st.markdown(f"### {badge}")
+                st.markdown(
+                    f"*The fine-tuned model produced {demo['fine_tuned']['n_pairs_above_threshold']} "
+                    f"canary-matching outputs out of {demo['config']['n_pairs_per_set']} pairs, "
+                    f"vs {demo['base']['n_pairs_above_threshold']} from the base (un-finetuned) "
+                    f"model. The fine-tune leaked the canaries; the base model didn't.*"
+                )
+
+                ms1, ms2, ms3 = st.columns(3)
+                ms1.metric(
+                    "Fine-tuned hits",
+                    f"{demo['fine_tuned']['n_pairs_above_threshold']} / {demo['config']['n_pairs_per_set']}",
+                )
+                ms2.metric(
+                    "Base hits (control)",
+                    f"{demo['base']['n_pairs_above_threshold']} / {demo['config']['n_pairs_per_set']}",
+                )
+                ms3.metric(
+                    "Confidence (Fisher's p)",
+                    format_p(p_fisher),
+                    help="Fisher's exact test on the 2×2 contingency of "
+                         "fine-tuned vs base hits. p < 0.001 = STRONG.",
+                )
+
+                with st.expander("Top 10 canary hits in fine-tuned outputs", expanded=False):
+                    import pandas as pd
+                    top_rows = []
+                    for s in demo["fine_tuned"]["top_pairs"]:
+                        top_rows.append({
+                            "canary": s["canary_id"],
+                            "suspect_clip": Path(s["suspect_path"]).name,
+                            "offset (s)": round(s["best_offset_s"], 2),
+                            "similarity": round(s["max_similarity"], 4),
+                        })
+                    st.dataframe(pd.DataFrame(top_rows), use_container_width=True)
+
+                with st.expander("Experiment config", expanded=False):
+                    st.json(demo["config"])
+                with st.expander("Raw report JSON", expanded=False):
+                    st.json(demo)
+            st.markdown("---")
+            st.caption(
+                "Or **scan your own outputs** below — bring a canary library "
+                "from Step 1 plus suspect audio from any source."
+            )
+
         lib_source = st.radio(
             "Library source",
             ["Use library generated this session", "Upload library zip"],
