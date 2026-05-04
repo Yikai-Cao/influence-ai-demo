@@ -1125,216 +1125,29 @@ with tab_canary:
             "`.manifest.json` recording exactly which canaries went where."
         )
 
-        st.markdown("#### 🆔 Per-song attribution")
         with st.expander(
-            "What is per-song attribution? (vs. corpus-level)",
+            "🆔 Two embedding modes: corpus-level vs per-song attribution",
             expanded=False,
         ):
             st.markdown(
-                "**Default mode (single-song embed):** detects that *some* "
-                "song from your catalog leaked, but won't tell you which.\n\n"
-                "**Per-song attribution mode:** assigns each song a unique "
-                "set of canaries so a hit identifies the source song. "
-                "Requires the library to have ≥ N_songs × n_per_song "
-                "**logical** canaries (transposition variants don't count).\n\n"
-                "The per-song workflow runs offline via the CLI:\n"
+                "Your choice **here at embed time** decides what the detector "
+                "in Step 3 can tell you later:\n\n"
+                "| Mode | Each song gets | Detector can answer |\n"
+                "|---|---|---|\n"
+                "| **Corpus** (default) | 3 canaries, randomly picked (overlap allowed) | *Some* song from your catalog leaked (yes/no) |\n"
+                "| **Per-song** | 3 **unique** canaries (disjoint allocation) | *Which specific song* leaked |\n\n"
+                "Per-song mode requires a bigger library: ≥ N_songs × n_per_song "
+                "**logical** canaries. Run via CLI:\n"
                 "```bash\n"
                 "python canary_prototype/batch_embed.py \\\n"
                 "    --hosts ./my_unreleased_catalog/ \\\n"
                 "    --canary_index ./canaries/canary_index.json \\\n"
                 "    --out_dir ./canaried_release/ \\\n"
                 "    --n_per_song 3 --gain_db -18 --mode unique\n"
-                "```"
+                "```\n"
+                "👉 To **see both modes' detection results** side-by-side, "
+                "go to **Step 3 (Scan)** and click the demo buttons there."
             )
-
-        st.caption(
-            "Click below for an in-browser demo: synthesizes a small library "
-            "+ 6 host songs, embeds uniquely, simulates 2 leaks, runs the "
-            "detector, and shows which source songs were attributed."
-        )
-        run_persong_demo = st.button(
-            "▶ Run per-song attribution demo",
-            disabled=not canary_deps_ok,
-            key="canary_persong_demo_btn",
-        )
-        if run_persong_demo:
-            with st.status("Running per-song demo…", expanded=True) as status:
-                import random as _r
-                import tempfile
-                import numpy as _np
-                import soundfile as _sf
-                from canary import canary_generator as cg
-                from canary import canary_assigner as ca
-                from canary import batch_embed as be
-                from canary import canary_detector as cd
-
-                work = Path(tempfile.mkdtemp(prefix="persong_demo_"))
-                sr = cg.SAMPLE_RATE
-                N_SONGS_DEMO = 6
-                N_PER_SONG_DEMO = 2  # 6 × 2 = 12 logical canaries needed
-                HOST_S = 10.0
-                N_LEAKED_DEMO = 2
-
-                st.write("Generating library (12 logical × 1 transp = 12 entries)…")
-                cg.generate_library(
-                    12, work / "lib", base_seed=0, transpositions=[0.0],
-                )
-                canary_index_path = work / "lib" / "canary_index.json"
-
-                st.write(f"Synthesizing {N_SONGS_DEMO} host songs…")
-                hosts_dir = work / "hosts"
-                hosts_dir.mkdir()
-                n_samples = int(HOST_S * sr)
-                host_paths: list[Path] = []
-                for i in range(N_SONGS_DEMO):
-                    rng = _np.random.default_rng(i)
-                    chunks = []
-                    for ck in range((n_samples // (sr * 4)) + 1):
-                        spec = cg.sample_spec(
-                            f"host_{i}_{ck}",
-                            seed=70_000 + i * 100 + ck,
-                            duration_s=4.0,
-                        )
-                        chunks.append(cg.synthesize_canary(spec))
-                    samples = _np.concatenate(chunks)[:n_samples].astype("float32")
-                    samples += rng.normal(0, 0.02, n_samples).astype("float32")
-                    p = hosts_dir / f"song_{i:02d}.wav"
-                    _sf.write(str(p), samples, sr)
-                    host_paths.append(p)
-
-                st.write("Batch-embedding (unique canary fingerprint per song)…")
-                canaried_root = work / "canaried"
-                master = be.batch_embed(
-                    host_paths=host_paths,
-                    canary_index_path=canary_index_path,
-                    out_dir=canaried_root,
-                    n_per_song=N_PER_SONG_DEMO,
-                    gain_db=-3.0,
-                    seed=0,
-                    mode="unique",
-                )
-
-                rng = _r.Random(7)
-                leaked_idx = sorted(rng.sample(range(N_SONGS_DEMO), N_LEAKED_DEMO))
-                leaked_paths = [host_paths[i] for i in leaked_idx]
-                st.write(
-                    f"Simulating {N_LEAKED_DEMO} leaked songs: "
-                    + ", ".join(p.name for p in leaked_paths)
-                )
-                suspects_dir = work / "suspects"
-                suspects_dir.mkdir()
-                leak_rng = _np.random.default_rng(13)
-                for i, hp in enumerate(leaked_paths):
-                    embed_ids = master["assignments"][str(hp)]
-                    chunks = []
-                    for cid in embed_ids:
-                        cpath = work / "lib" / f"{cid}.wav"
-                        samples, _ = _sf.read(str(cpath), dtype="float32",
-                                               always_2d=False)
-                        if samples.ndim == 2:
-                            samples = samples.mean(axis=1)
-                        chunks.append(samples)
-                        chunks.append(leak_rng.normal(
-                            0, 0.02, int(0.4 * sr)).astype("float32"))
-                    out = _np.concatenate(chunks)
-                    target_n = int(HOST_S * sr)
-                    if len(out) < target_n:
-                        tail = leak_rng.normal(
-                            0, 0.02, target_n - len(out)).astype("float32")
-                        out = _np.concatenate([out, tail])
-                    out = out[:target_n]
-                    _sf.write(str(suspects_dir / f"suno_output_{i:02d}.wav"),
-                              out, sr)
-                # Plus a pristine control suspect that wasn't canaried
-                rng_c = _np.random.default_rng(99)
-                pristine_chunks = []
-                for ck in range((n_samples // (sr * 4)) + 1):
-                    spec = cg.sample_spec(
-                        f"pristine_{ck}", seed=80_000 + ck, duration_s=4.0,
-                    )
-                    pristine_chunks.append(cg.synthesize_canary(spec))
-                pristine = _np.concatenate(pristine_chunks)[:n_samples].astype("float32")
-                pristine += rng_c.normal(0, 0.02, n_samples).astype("float32")
-                _sf.write(
-                    str(suspects_dir / f"suno_output_{N_LEAKED_DEMO:02d}_clean.wav"),
-                    pristine, sr,
-                )
-
-                st.write("Running detector…")
-                canary_index = json.loads(canary_index_path.read_text())
-                cd._resolve_canary_paths(canary_index, canary_index_path)
-                suspects = cd.collect_suspect_paths(suspects_dir)
-                report = cd.detect(canary_index, suspects,
-                                    threshold=0.55, null_fpr=0.01)
-                attribution = ca.attribute_hits_to_songs(
-                    report.to_dict(), master, threshold=0.55,
-                )
-
-                st.session_state["persong_demo_result"] = {
-                    "ground_truth_leaked": [p.name for p in leaked_paths],
-                    "report": report.to_dict(),
-                    "attribution": attribution,
-                    "master_assignments": {
-                        Path(k).name: v for k, v in master["assignments"].items()
-                    },
-                }
-                status.update(label="Per-song demo complete", state="complete")
-
-        # Result render — must live OUTSIDE any expander/status so we
-        # can use sub-expanders for the attribution table + manifest.
-        if "persong_demo_result" in st.session_state:
-            r = st.session_state["persong_demo_result"]
-            attr = r["attribution"]
-            gt = set(r["ground_truth_leaked"])
-            identified = set()
-            for suspect, info in attr["by_suspect"].items():
-                if info["uniquely_identified"]:
-                    identified.add(
-                        Path(info["source_songs_ranked"][0]["host_path"]).name
-                    )
-            correct = identified & gt
-            spurious = identified - gt
-            missed = gt - identified
-
-            st.markdown("#### Result")
-            if len(correct) == len(gt) and not spurious:
-                st.success(
-                    f"✅ All {len(gt)} leaked songs uniquely identified, "
-                    "no false positives."
-                )
-            else:
-                st.warning(
-                    f"correct: {len(correct)}/{len(gt)}  ·  "
-                    f"missed: {len(missed)}  ·  spurious: {len(spurious)}"
-                )
-
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Ground-truth leaks", len(gt))
-            m2.metric("Uniquely identified", len(identified))
-            m3.metric("False positives", len(spurious))
-
-            with st.expander("Per-suspect attribution table", expanded=True):
-                import pandas as pd
-                rows = []
-                for suspect, info in attr["by_suspect"].items():
-                    top_song = (
-                        Path(info["source_songs_ranked"][0]["host_path"]).name
-                        if info["source_songs_ranked"] else "—"
-                    )
-                    rows.append({
-                        "suspect": Path(suspect).name,
-                        "uniquely identified": "✅" if info["uniquely_identified"] else "—",
-                        "top candidate": top_song,
-                        "logical hits": (
-                            info["source_songs_ranked"][0]["canaries_hit"]
-                            if info["source_songs_ranked"] else 0
-                        ),
-                    })
-                st.dataframe(pd.DataFrame(rows), use_container_width=True)
-
-            with st.expander("Master manifest (which song got which canaries)",
-                              expanded=False):
-                st.json(r["master_assignments"])
 
         st.markdown("---")
 
@@ -1569,188 +1382,363 @@ with tab_canary:
     else:
         st.markdown("### Scan suspect model outputs for leaks")
         st.caption(
-            "Upload audio you suspect was generated by a model trained on "
-            "your canaried catalog. We compute MFCC + chromagram sliding "
-            "cosine similarity at every (canary × suspect) pair, then "
-            "binomial-test the count of pairs above threshold against the "
-            "calibrated null FPR. Output is a corpus-level p-value."
+            "Detection runs the canary library against suspect audio (every "
+            "canary × every clip), counts hits above threshold, then runs a "
+            "statistical test. The verdict you get depends on what "
+            "embedding mode you used in Step 2."
         )
 
-        # ── Real-model demo banner ──────────────────────────────────────
+        # ── Real-model results section ──────────────────────────────────
         realmodel_demo_path = APP_DIR / "examples" / "canary_realmodel_demo.json"
-        if realmodel_demo_path.exists():
-            st.markdown("---")
-            with st.container():
-                rm_col1, rm_col2 = st.columns([1, 3])
-                with rm_col1:
-                    show_realmodel = st.button(
-                        "🎯 Show real-model result",
-                        help="Display the pre-computed canary detection "
-                             "report from our actual MusicGen-small "
-                             "fine-tune experiment (Path A, May 3 2026).",
-                        type="primary",
-                        key="canary_show_realmodel",
-                    )
-                with rm_col2:
-                    st.caption(
-                        "**Real-model validation** — we LoRA fine-tuned "
-                        "MusicGen-small on 100 canaried FMA clips, generated "
-                        "50 outputs from the fine-tuned model + 50 from the "
-                        "base model, then ran the detector. Click to see "
-                        "the result."
-                    )
-            if show_realmodel:
-                st.session_state["canary_realmodel_loaded"] = True
-
-            if st.session_state.get("canary_realmodel_loaded"):
-                demo = json.loads(realmodel_demo_path.read_text())
-                st.markdown("#### 🎯 Real-model result — `canary_v2_loud`")
-                st.caption(demo["description"])
-
-                # Headline verdict
-                p_fisher = demo["fisher_exact_p"]
-                if p_fisher < 0.001:
-                    badge = "🟢 :red[**STRONG evidence of canary leakage**]"
-                elif p_fisher < 0.05:
-                    badge = "🟡 :orange[**MODERATE evidence**]"
-                else:
-                    badge = "⚪ **NO evidence**"
-                st.markdown(f"### {badge}")
-                st.markdown(
-                    f"*The fine-tuned model produced {demo['fine_tuned']['n_pairs_above_threshold']} "
-                    f"canary-matching outputs out of {demo['config']['n_pairs_per_set']} pairs, "
-                    f"vs {demo['base']['n_pairs_above_threshold']} from the base (un-finetuned) "
-                    f"model. The fine-tune leaked the canaries; the base model didn't.*"
-                )
-
-                ms1, ms2, ms3 = st.columns(3)
-                ms1.metric(
-                    "Fine-tuned hits",
-                    f"{demo['fine_tuned']['n_pairs_above_threshold']} / {demo['config']['n_pairs_per_set']}",
-                )
-                ms2.metric(
-                    "Base hits (control)",
-                    f"{demo['base']['n_pairs_above_threshold']} / {demo['config']['n_pairs_per_set']}",
-                )
-                ms3.metric(
-                    "Confidence (Fisher's p)",
-                    format_p(p_fisher),
-                    help="Fisher's exact test on the 2×2 contingency of "
-                         "fine-tuned vs base hits. p < 0.001 = STRONG.",
-                )
-
-                with st.expander("Top 10 canary hits in fine-tuned outputs", expanded=False):
-                    import pandas as pd
-                    top_rows = []
-                    for s in demo["fine_tuned"]["top_pairs"]:
-                        top_rows.append({
-                            "canary": s["canary_id"],
-                            "suspect_clip": Path(s["suspect_path"]).name,
-                            "offset (s)": round(s["best_offset_s"], 2),
-                            "similarity": round(s["max_similarity"], 4),
-                        })
-                    st.dataframe(pd.DataFrame(top_rows), use_container_width=True)
-
-                with st.expander("Experiment config", expanded=False):
-                    st.json(demo["config"])
-                with st.expander("Raw report JSON", expanded=False):
-                    st.json(demo)
-
-        # ── Per-song attribution on real-model data ─────────────────
         persong_real_path = APP_DIR / "examples" / "canary_persong_realmodel_demo.json"
-        if persong_real_path.exists():
-            st.markdown("---")
-            ps_col1, ps_col2 = st.columns([1, 3])
-            with ps_col1:
-                show_persong_real = st.button(
-                    "🆔 Show per-song attribution",
-                    help="Real-model per-song attribution: 30 songs × 3 unique "
-                         "canaries each. After fine-tuning MusicGen-small on "
-                         "the canaried clips, the detector can identify which "
-                         "specific source song each leaked output came from.",
-                    key="canary_show_persong_real",
+
+        st.markdown("#### 🎯 Real-model experiment results")
+        st.caption(
+            "Two pre-computed reports from MusicGen-small fine-tune "
+            "experiments — click either to see how each embedding mode's "
+            "detection plays out."
+        )
+        rm_col1, rm_col2 = st.columns(2)
+        with rm_col1:
+            st.markdown("**Corpus-level**")
+            st.caption("100 songs, shared canary library (v2)")
+            show_realmodel = st.button(
+                "🎯 Show corpus-level result",
+                help="canary_v2_loud: 100 host clips × shared 30-canary "
+                     "library. Detector returns a single corpus-level "
+                     "p-value: 'some song from your catalog leaked'.",
+                disabled=not realmodel_demo_path.exists(),
+                key="canary_show_realmodel",
+                use_container_width=True,
+            )
+        with rm_col2:
+            st.markdown("**Per-song attribution**")
+            st.caption("30 songs, unique canary fingerprint per song (v4)")
+            show_persong_real = st.button(
+                "🆔 Show per-song result",
+                help="canary_v4_persong: 30 host clips × 3 unique canaries "
+                     "each (disjoint allocation). Detector identifies "
+                     "*which specific song* each leak came from.",
+                disabled=not persong_real_path.exists(),
+                key="canary_show_persong_real",
+                use_container_width=True,
+            )
+        if show_realmodel:
+            st.session_state["canary_realmodel_loaded"] = True
+        if show_persong_real:
+            st.session_state["persong_real_loaded"] = True
+
+        if realmodel_demo_path.exists() and st.session_state.get("canary_realmodel_loaded"):
+            demo = json.loads(realmodel_demo_path.read_text())
+            st.markdown("##### 🎯 Corpus-level result — `canary_v2_loud`")
+            st.caption(demo["description"])
+
+            # Headline verdict
+            p_fisher = demo["fisher_exact_p"]
+            if p_fisher < 0.001:
+                badge = "🟢 :red[**STRONG evidence of canary leakage**]"
+            elif p_fisher < 0.05:
+                badge = "🟡 :orange[**MODERATE evidence**]"
+            else:
+                badge = "⚪ **NO evidence**"
+            st.markdown(f"### {badge}")
+            st.markdown(
+                f"*The fine-tuned model produced {demo['fine_tuned']['n_pairs_above_threshold']} "
+                f"canary-matching outputs out of {demo['config']['n_pairs_per_set']} pairs, "
+                f"vs {demo['base']['n_pairs_above_threshold']} from the base (un-finetuned) "
+                f"model. The fine-tune leaked the canaries; the base model didn't.*"
+            )
+
+            ms1, ms2, ms3 = st.columns(3)
+            ms1.metric(
+                "Fine-tuned hits",
+                f"{demo['fine_tuned']['n_pairs_above_threshold']} / {demo['config']['n_pairs_per_set']}",
+            )
+            ms2.metric(
+                "Base hits (control)",
+                f"{demo['base']['n_pairs_above_threshold']} / {demo['config']['n_pairs_per_set']}",
+            )
+            ms3.metric(
+                "Confidence (Fisher's p)",
+                format_p(p_fisher),
+                help="Fisher's exact test on the 2×2 contingency of "
+                     "fine-tuned vs base hits. p < 0.001 = STRONG.",
+            )
+
+            with st.expander("Top 10 canary hits in fine-tuned outputs", expanded=False):
+                import pandas as pd
+                top_rows = []
+                for s in demo["fine_tuned"]["top_pairs"]:
+                    top_rows.append({
+                        "canary": s["canary_id"],
+                        "suspect_clip": Path(s["suspect_path"]).name,
+                        "offset (s)": round(s["best_offset_s"], 2),
+                        "similarity": round(s["max_similarity"], 4),
+                    })
+                st.dataframe(pd.DataFrame(top_rows), use_container_width=True)
+
+            with st.expander("Experiment config", expanded=False):
+                st.json(demo["config"])
+
+        if persong_real_path.exists() and st.session_state.get("persong_real_loaded"):
+            pdemo = json.loads(persong_real_path.read_text())
+            st.markdown("##### 🆔 Per-song attribution result — `canary_v4_persong`")
+            st.caption(pdemo["description"])
+
+            cfg = pdemo["config"]
+            headline_thr = pdemo["headline_threshold"]
+            hr = pdemo["threshold_sweep"][headline_thr]
+
+            if hr["ft_uniquely_identified_count"] >= 1 and hr["base_false_positive_count"] == 0:
+                st.success(
+                    f"✅ **{hr['ft_uniquely_identified_count']} source song(s) "
+                    f"uniquely identified** in fine-tuned outputs (threshold "
+                    f"{headline_thr}), **0 false positives** in base control."
                 )
-            with ps_col2:
+            else:
+                st.info(
+                    f"At threshold {headline_thr}: FT unique = "
+                    f"{hr['ft_uniquely_identified_count']}, "
+                    f"base FP = {hr['base_false_positive_count']}"
+                )
+
+            p1, p2, p3 = st.columns(3)
+            p1.metric("Total ft hits", hr["ft_total_hits"])
+            p2.metric("Uniquely identified songs",
+                       hr["ft_uniquely_identified_count"])
+            p3.metric("Base false positives",
+                       hr["base_false_positive_count"])
+
+            st.markdown(
+                f"**Identified source songs:** "
+                + ", ".join(f"`{s}`" for s in hr["ft_uniquely_identified_songs"])
+                if hr["ft_uniquely_identified_songs"]
+                else "**Identified source songs:** none at this threshold"
+            )
+
+            with st.expander("Threshold sweep (signal vs noise tradeoff)",
+                              expanded=True):
+                import pandas as pd
+                sweep_rows = []
+                for thr, r in pdemo["threshold_sweep"].items():
+                    sweep_rows.append({
+                        "threshold": thr,
+                        "ft hits": r["ft_total_hits"],
+                        "base hits": r["base_total_hits"],
+                        "ft unique songs": r["ft_uniquely_identified_count"],
+                        "base false positives": r["base_false_positive_count"],
+                    })
+                st.dataframe(pd.DataFrame(sweep_rows), use_container_width=True)
                 st.caption(
-                    "**Per-song attribution on real model** — does the canary "
-                    "system tell you *which* specific song leaked, or only that "
-                    "*some* song from your catalog did? Run on today's MusicGen "
-                    "experiment to see."
-                )
-            if show_persong_real:
-                st.session_state["persong_real_loaded"] = True
-
-            if st.session_state.get("persong_real_loaded"):
-                pdemo = json.loads(persong_real_path.read_text())
-                st.markdown("#### 🆔 Per-song attribution on real-model outputs")
-                st.caption(pdemo["description"])
-
-                cfg = pdemo["config"]
-                headline_thr = pdemo["headline_threshold"]
-                hr = pdemo["threshold_sweep"][headline_thr]
-
-                if hr["ft_uniquely_identified_count"] >= 1 and hr["base_false_positive_count"] == 0:
-                    st.success(
-                        f"✅ **{hr['ft_uniquely_identified_count']} source song(s) "
-                        f"uniquely identified** in fine-tuned outputs (threshold "
-                        f"{headline_thr}), **0 false positives** in base control."
-                    )
-                else:
-                    st.info(
-                        f"At threshold {headline_thr}: FT unique = "
-                        f"{hr['ft_uniquely_identified_count']}, "
-                        f"base FP = {hr['base_false_positive_count']}"
-                    )
-
-                p1, p2, p3 = st.columns(3)
-                p1.metric("Total ft hits", hr["ft_total_hits"])
-                p2.metric("Uniquely identified songs",
-                           hr["ft_uniquely_identified_count"])
-                p3.metric("Base false positives",
-                           hr["base_false_positive_count"])
-
-                st.markdown(
-                    f"**Identified source songs:** "
-                    + ", ".join(f"`{s}`" for s in hr["ft_uniquely_identified_songs"])
-                    if hr["ft_uniquely_identified_songs"]
-                    else "**Identified source songs:** none at this threshold"
+                    "Higher thresholds reduce noise (fewer base false "
+                    "positives) at the cost of recall. 0.58 is the cleanest "
+                    "operating point for this run."
                 )
 
-                with st.expander("Threshold sweep (signal vs noise tradeoff)",
-                                  expanded=True):
-                    import pandas as pd
-                    sweep_rows = []
-                    for thr, r in pdemo["threshold_sweep"].items():
-                        sweep_rows.append({
-                            "threshold": thr,
-                            "ft hits": r["ft_total_hits"],
-                            "base hits": r["base_total_hits"],
-                            "ft unique songs": r["ft_uniquely_identified_count"],
-                            "base false positives": r["base_false_positive_count"],
-                        })
-                    st.dataframe(pd.DataFrame(sweep_rows), use_container_width=True)
-                    st.caption(
-                        "Higher thresholds reduce noise (fewer base false "
-                        "positives) at the cost of recall. 0.58 is the cleanest "
-                        "operating point for this run."
+            with st.expander("Per-suspect attribution at headline threshold",
+                              expanded=False):
+                import pandas as pd
+                rows = []
+                for r in hr["ft_per_suspect"]:
+                    cands = r.get("owned_candidates", [])
+                    rows.append({
+                        "suspect": r["suspect"],
+                        "uniquely identified": "✅" if r["uniquely_identified"] else "—",
+                        "candidate(s)": ", ".join(cands) if cands else "(unowned)",
+                        "n hits": r["n_hits"],
+                    })
+                st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+            with st.expander("Experiment config", expanded=False):
+                st.json(cfg)
+
+        st.markdown("---")
+
+        # ── Live in-browser per-song demo ───────────────────────────────
+        st.markdown("#### ▶ Try the per-song flow live (in-browser)")
+        st.caption(
+            "Synthesizes a small library + 6 host songs, embeds with unique "
+            "canary fingerprints, simulates 2 leaks, runs the detector, "
+            "shows which source songs were attributed. ~20 seconds, all CPU."
+        )
+        run_persong_demo = st.button(
+            "▶ Run per-song demo",
+            disabled=not canary_deps_ok,
+            key="canary_persong_demo_btn",
+        )
+        if run_persong_demo:
+            with st.status("Running per-song demo…", expanded=True) as status:
+                import random as _r
+                import tempfile
+                import numpy as _np
+                import soundfile as _sf
+                from canary import canary_generator as cg
+                from canary import canary_assigner as ca
+                from canary import batch_embed as be
+                from canary import canary_detector as cd
+
+                work = Path(tempfile.mkdtemp(prefix="persong_demo_"))
+                sr = cg.SAMPLE_RATE
+                N_SONGS_DEMO = 6
+                N_PER_SONG_DEMO = 2
+                HOST_S = 10.0
+                N_LEAKED_DEMO = 2
+
+                st.write("Generating library (12 logical × 1 transp = 12 entries)…")
+                cg.generate_library(
+                    12, work / "lib", base_seed=0, transpositions=[0.0],
+                )
+                canary_index_path = work / "lib" / "canary_index.json"
+
+                st.write(f"Synthesizing {N_SONGS_DEMO} host songs…")
+                hosts_dir = work / "hosts"
+                hosts_dir.mkdir()
+                n_samples = int(HOST_S * sr)
+                host_paths: list[Path] = []
+                for i in range(N_SONGS_DEMO):
+                    rng = _np.random.default_rng(i)
+                    chunks = []
+                    for ck in range((n_samples // (sr * 4)) + 1):
+                        spec = cg.sample_spec(
+                            f"host_{i}_{ck}",
+                            seed=70_000 + i * 100 + ck,
+                            duration_s=4.0,
+                        )
+                        chunks.append(cg.synthesize_canary(spec))
+                    samples = _np.concatenate(chunks)[:n_samples].astype("float32")
+                    samples += rng.normal(0, 0.02, n_samples).astype("float32")
+                    p = hosts_dir / f"song_{i:02d}.wav"
+                    _sf.write(str(p), samples, sr)
+                    host_paths.append(p)
+
+                st.write("Batch-embedding (unique canary fingerprint per song)…")
+                canaried_root = work / "canaried"
+                master = be.batch_embed(
+                    host_paths=host_paths,
+                    canary_index_path=canary_index_path,
+                    out_dir=canaried_root,
+                    n_per_song=N_PER_SONG_DEMO,
+                    gain_db=-3.0,
+                    seed=0,
+                    mode="unique",
+                )
+
+                rng = _r.Random(7)
+                leaked_idx = sorted(rng.sample(range(N_SONGS_DEMO), N_LEAKED_DEMO))
+                leaked_paths = [host_paths[i] for i in leaked_idx]
+                st.write(
+                    f"Simulating {N_LEAKED_DEMO} leaked songs: "
+                    + ", ".join(p.name for p in leaked_paths)
+                )
+                suspects_dir = work / "suspects"
+                suspects_dir.mkdir()
+                leak_rng = _np.random.default_rng(13)
+                for i, hp in enumerate(leaked_paths):
+                    embed_ids = master["assignments"][str(hp)]
+                    chunks = []
+                    for cid in embed_ids:
+                        cpath = work / "lib" / f"{cid}.wav"
+                        samples, _ = _sf.read(str(cpath), dtype="float32",
+                                               always_2d=False)
+                        if samples.ndim == 2:
+                            samples = samples.mean(axis=1)
+                        chunks.append(samples)
+                        chunks.append(leak_rng.normal(
+                            0, 0.02, int(0.4 * sr)).astype("float32"))
+                    out = _np.concatenate(chunks)
+                    target_n = int(HOST_S * sr)
+                    if len(out) < target_n:
+                        tail = leak_rng.normal(
+                            0, 0.02, target_n - len(out)).astype("float32")
+                        out = _np.concatenate([out, tail])
+                    out = out[:target_n]
+                    _sf.write(str(suspects_dir / f"suno_output_{i:02d}.wav"),
+                              out, sr)
+                rng_c = _np.random.default_rng(99)
+                pristine_chunks = []
+                for ck in range((n_samples // (sr * 4)) + 1):
+                    spec = cg.sample_spec(
+                        f"pristine_{ck}", seed=80_000 + ck, duration_s=4.0,
                     )
+                    pristine_chunks.append(cg.synthesize_canary(spec))
+                pristine = _np.concatenate(pristine_chunks)[:n_samples].astype("float32")
+                pristine += rng_c.normal(0, 0.02, n_samples).astype("float32")
+                _sf.write(
+                    str(suspects_dir / f"suno_output_{N_LEAKED_DEMO:02d}_clean.wav"),
+                    pristine, sr,
+                )
 
-                with st.expander("Per-suspect attribution at headline threshold",
-                                  expanded=False):
-                    import pandas as pd
-                    rows = []
-                    for r in hr["ft_per_suspect"]:
-                        cands = r.get("owned_candidates", [])
-                        rows.append({
-                            "suspect": r["suspect"],
-                            "uniquely identified": "✅" if r["uniquely_identified"] else "—",
-                            "candidate(s)": ", ".join(cands) if cands else "(unowned)",
-                            "n hits": r["n_hits"],
-                        })
-                    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+                st.write("Running detector…")
+                canary_index = json.loads(canary_index_path.read_text())
+                cd._resolve_canary_paths(canary_index, canary_index_path)
+                suspects = cd.collect_suspect_paths(suspects_dir)
+                report = cd.detect(canary_index, suspects,
+                                    threshold=0.55, null_fpr=0.01)
+                attribution = ca.attribute_hits_to_songs(
+                    report.to_dict(), master, threshold=0.55,
+                )
 
-                with st.expander("Experiment config", expanded=False):
-                    st.json(cfg)
+                st.session_state["persong_demo_result"] = {
+                    "ground_truth_leaked": [p.name for p in leaked_paths],
+                    "attribution": attribution,
+                    "master_assignments": {
+                        Path(k).name: v for k, v in master["assignments"].items()
+                    },
+                }
+                status.update(label="Per-song demo complete", state="complete")
+
+        if "persong_demo_result" in st.session_state:
+            r = st.session_state["persong_demo_result"]
+            attr = r["attribution"]
+            gt = set(r["ground_truth_leaked"])
+            identified = set()
+            for suspect, info in attr["by_suspect"].items():
+                if info["uniquely_identified"]:
+                    identified.add(
+                        Path(info["source_songs_ranked"][0]["host_path"]).name
+                    )
+            correct = identified & gt
+            spurious = identified - gt
+            missed = gt - identified
+
+            if len(correct) == len(gt) and not spurious:
+                st.success(
+                    f"✅ All {len(gt)} leaked songs uniquely identified, "
+                    "no false positives."
+                )
+            else:
+                st.warning(
+                    f"correct: {len(correct)}/{len(gt)}  ·  "
+                    f"missed: {len(missed)}  ·  spurious: {len(spurious)}"
+                )
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Ground-truth leaks", len(gt))
+            m2.metric("Uniquely identified", len(identified))
+            m3.metric("False positives", len(spurious))
+
+            with st.expander("Per-suspect attribution table", expanded=True):
+                import pandas as pd
+                rows = []
+                for suspect, info in attr["by_suspect"].items():
+                    top_song = (
+                        Path(info["source_songs_ranked"][0]["host_path"]).name
+                        if info["source_songs_ranked"] else "—"
+                    )
+                    rows.append({
+                        "suspect": Path(suspect).name,
+                        "uniquely identified": "✅" if info["uniquely_identified"] else "—",
+                        "top candidate": top_song,
+                        "logical hits": (
+                            info["source_songs_ranked"][0]["canaries_hit"]
+                            if info["source_songs_ranked"] else 0
+                        ),
+                    })
+                st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+            with st.expander("Master manifest (which song got which canaries)",
+                              expanded=False):
+                st.json(r["master_assignments"])
 
         st.markdown("---")
         st.caption(
