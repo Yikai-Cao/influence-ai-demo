@@ -1442,16 +1442,20 @@ with tab_canary:
                 use_container_width=True,
             )
         with rm_col3:
-            st.markdown("**▶ Live demo**  \nIn-browser, ~20 s")
+            st.markdown(
+                "**▶ Algorithm walkthrough**  \nSynthetic, ~20 s in-browser"
+            )
             if livedemo_has_result:
                 live_label = "Hide result" if livedemo_open else "Show result"
             else:
-                live_label = "Run live"
+                live_label = "Run walkthrough"
             run_persong_demo_btn = st.button(
                 live_label,
-                help="In-browser per-song demo: synthesize a small library "
-                     "+ 6 host songs, embed, simulate 2 leaks, scan, attribute. "
-                     "All runs on this CPU.",
+                help="Self-contained per-song algorithm demo. Synthesizes "
+                     "everything (library + 6 hosts + simulated leaks) "
+                     "on this CPU and runs the full pipeline. NOT a real "
+                     "model — just shows the algorithm logic end-to-end. "
+                     "For real-model results, use the other two buttons.",
                 disabled=not canary_deps_ok,
                 key="canary_persong_demo_btn",
                 use_container_width=True,
@@ -1857,11 +1861,24 @@ with tab_canary:
             )
 
         c1, c2 = st.columns(2)
-        threshold = c1.slider("Detection threshold (cosine)", 0.50, 0.95, 0.70,
-                              step=0.01, key="canary_scan_threshold")
-        null_fpr = c2.slider("Null FPR (for binomial test)",
-                              0.001, 0.10, 0.01, step=0.001, format="%.3f",
-                              key="canary_scan_null_fpr")
+        threshold = c1.slider(
+            "Detection threshold (cosine)", 0.50, 0.95, 0.55, step=0.01,
+            help="Max-similarity above this counts as a hit. 0.55 is the "
+                 "operating point empirically validated on real MusicGen "
+                 "outputs (after codec). Raise toward 0.70 for cleaner "
+                 "synthetic-only signals; drop toward 0.50 if codec "
+                 "degradation is heavy.",
+            key="canary_scan_threshold",
+        )
+        null_fpr = c2.slider(
+            "Null FPR (for binomial test)", 0.001, 0.10, 0.01,
+            step=0.001, format="%.3f",
+            help="Expected false-positive rate per pair under the null "
+                 "hypothesis (no canary planted). Calibrate empirically "
+                 "by running the detector on a known-clean suspect set "
+                 "and dividing the hit count by the pair count.",
+            key="canary_scan_null_fpr",
+        )
 
         if st.button("Run scan", type="primary",
                       disabled=not (canary_deps_ok and lib_zip_bytes
