@@ -15,5 +15,7 @@ peft>=0.10
 # explicitly so the canary tab's spectrogram comparison reliably
 # loads on a fresh HF Space environment.
 matplotlib>=3.7
-# modal is optional — only needed for the Modal A10G backend.
-# Streamlit Cloud users can skip it. Install locally with: pip install modal
+# modal — needed for the 🚀 Audit your music tab (calls Modal A10G
+# backend for live PETAL inference). Requires MODAL_TOKEN_ID +
+# MODAL_TOKEN_SECRET as HF Space secrets, set by the deploy operator.
+modal>=0.66

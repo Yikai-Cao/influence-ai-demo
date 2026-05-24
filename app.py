@@ -493,6 +493,114 @@ def render_report_panel(r: EvidenceReport):
         st.json(r.to_dict())
 
 
+def render_petal_panel(summary: dict):
+    """Render a PETAL (black-box continuation-similarity MIA) result.
+
+    The PETAL summary dict has shape:
+        {"experiment": ..., "config": {...}, "report": {
+            "n_member", "n_nonmember",
+            "member_mean_sim", "nonmember_mean_sim",
+            "t_stat", "p_value",
+            "member_sims": [..], "nonmember_sims": [..]
+        }}
+
+    Different from the EvidenceReport panel because PETAL doesn't compute
+    per-feature stats — it has a single similarity-distribution comparison
+    per side. So we show distribution shape instead of per-feature breakdown.
+    """
+    import numpy as np
+    r = summary.get("report", {})
+    cfg = summary.get("config", {})
+    p = float(r.get("p_value", 1.0))
+    t = float(r.get("t_stat", 0.0))
+    m_mean = float(r.get("member_mean_sim", 0.0))
+    c_mean = float(r.get("nonmember_mean_sim", 0.0))
+
+    # Map p → verdict in the same style as the other panel
+    if p < 0.001 and t > 0:
+        emoji, color, headline, plain = "🟢", "red", "STRONG evidence", \
+            "This data was very likely used to train the model."
+    elif p < 0.05 and t > 0:
+        emoji, color, headline, plain = "🟡", "orange", "MODERATE evidence", \
+            "Meaningful signal — model's continuations are closer to these clips than to control."
+    elif t < 0 and p > 0.95:
+        emoji, color, headline, plain = "⚪", "gray", "REVERSE signal", \
+            "Suspect sims LOWER than control — usually a style-confound; rerun with style-matched control."
+    else:
+        emoji, color, headline, plain = "⚪", "green", "NO evidence", \
+            "No black-box memorization signal. Sample may be too small or data not in training."
+
+    st.markdown(f"### {emoji} :{color}[**{headline}**]")
+    st.markdown(f"*{plain}*")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Confidence (p-value)", format_p(p),
+              help="One-sided H1: suspect mean sim > control mean sim. "
+                   "Lower = more confident.")
+    c2.metric("Effect (t-stat)", f"{t:+.3f}",
+              help="Positive = suspect continuations more like targets than "
+                   "control continuations. Negative = reverse / confound.")
+    c3.metric("Suspect mean sim", f"{m_mean:.4f}",
+              help="MFCC+chroma cosine similarity between MusicGen's "
+                   "continuation and the actual target.")
+    c4.metric("Control mean sim", f"{c_mean:.4f}",
+              help="Same metric, on out-of-training control set.")
+
+    # Distribution histogram
+    m_sims = r.get("member_sims") or []
+    c_sims = r.get("nonmember_sims") or []
+    if m_sims and c_sims:
+        with st.expander("Similarity distributions", expanded=True):
+            try:
+                import matplotlib.pyplot as plt
+                fig, ax = plt.subplots(figsize=(7, 3))
+                bins = np.linspace(
+                    min(min(m_sims), min(c_sims)),
+                    max(max(m_sims), max(c_sims)),
+                    25,
+                )
+                ax.hist(c_sims, bins=bins, alpha=0.6, label=f"Control (n={len(c_sims)})",
+                        color="#888")
+                ax.hist(m_sims, bins=bins, alpha=0.6, label=f"Suspect (n={len(m_sims)})",
+                        color="#d35")
+                ax.axvline(c_mean, ls="--", color="#888", lw=1)
+                ax.axvline(m_mean, ls="--", color="#d35", lw=1)
+                ax.set_xlabel("Continuation similarity (MFCC+chroma cosine)")
+                ax.set_ylabel("# clips")
+                ax.legend(loc="upper left")
+                ax.set_title(
+                    f"Suspect right-shifted by Δ={m_mean - c_mean:+.4f}  "
+                    f"(t = {t:+.2f}, p = {p:.3g})"
+                )
+                fig.tight_layout()
+                st.pyplot(fig)
+            except Exception as e:
+                st.caption(f"(matplotlib unavailable: {e})")
+                st.bar_chart({"suspect": m_sims[:100], "control": c_sims[:100]})
+
+    with st.expander("Methodology", expanded=False):
+        st.markdown(
+            "**PETAL** (Wang et al., USENIX Security 2025) is a true "
+            "**label-only / black-box** membership-inference attack:\n\n"
+            "1. For each clip, split into **prefix** (first half) + **target** (second half).\n"
+            "2. Send the **prefix** to the suspect model's continuation API — "
+            "it generates an audio extension.\n"
+            "3. Compute **MFCC+chroma cosine** between the model's continuation "
+            "and the **actual target half**.\n"
+            "4. Aggregate across the corpus, run one-sided Welch's t-test "
+            "(H₁: members' continuations are closer to their actual targets than non-members').\n\n"
+            "**Why this matters**: no logprobs / top-k probabilities needed. "
+            "Suno, Udio, ElevenLabs all expose only audio output — this is "
+            "the only attack class that works on them."
+        )
+
+    with st.expander("Run configuration", expanded=False):
+        st.json(cfg)
+
+    with st.expander("Raw JSON"):
+        st.json(summary)
+
+
 # ── Page chrome ───────────────────────────────────────────────────────
 
 st.set_page_config(
@@ -505,10 +613,10 @@ st.set_page_config(
 st.title("🎯 Influence AI")
 st.markdown(
     "#### Did an AI model train on your data?\n"
-    "Three checks, each with a clear yes/no answer and a confidence score."
+    "Four checks, each with a clear yes/no answer and a confidence score."
 )
 
-hero_a, hero_b, hero_c = st.columns(3)
+hero_a, hero_b, hero_c, hero_d = st.columns(4)
 with hero_a:
     st.markdown(
         "**📝 Text**  \n"
@@ -517,12 +625,17 @@ with hero_a:
 with hero_b:
     st.markdown(
         "**🎵 Music**  \n"
-        "Upload audio → check if a music model has seen it."
+        "Upload audio → check if a music model has seen it (needs logits)."
     )
 with hero_c:
     st.markdown(
         "**🪤 Watermark**  \n"
         "*Before* you release new music: hide a tag, scan for leaks later."
+    )
+with hero_d:
+    st.markdown(
+        "**🎯 Black-box**  \n"
+        "Audit closed-API music models (Suno / Udio) with **no logits needed**."
     )
 
 with st.expander("How to use this site (30 seconds)", expanded=False):
@@ -538,10 +651,12 @@ with st.expander("How to use this site (30 seconds)", expanded=False):
 
 st.divider()
 
-tab_text, tab_audio, tab_canary = st.tabs([
+tab_text, tab_audio, tab_canary, tab_petal, tab_audit = st.tabs([
     "📝 Text",
     "🎵 Music",
     "🪤 Watermark unreleased music",
+    "🎯 Black-box (Suno-ready)",
+    "🚀 Audit your music (live)",
 ])
 
 
@@ -1960,3 +2075,335 @@ with tab_canary:
         "data. Watermarking literature is full of defeated schemes.\n"
         "- Library is private. Don't share `canary_index.json` publicly."
     )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# TAB 4 — PETAL (Black-box continuation-similarity MIA, Suno-ready)
+# ══════════════════════════════════════════════════════════════════════
+
+with tab_petal:
+    st.markdown("### Black-box audit of closed music models")
+    st.markdown(
+        "The Music tab (`🎵`) and Text tab (`📝`) both need **token-level "
+        "log-probabilities** from the model. Suno / Udio / ElevenLabs **don't "
+        "expose those** — only the generated audio. This tab uses **PETAL** "
+        "(Wang et al., USENIX Security 2025), a label-only attack that needs "
+        "only the model's continuation/extension API. It's the only attack "
+        "class that targets fully closed audio APIs."
+    )
+
+    info_col, demo_col = st.columns([2, 1])
+    with info_col:
+        with st.expander("How to read the verdict", expanded=False):
+            st.markdown(
+                "| Verdict | Meaning |\n"
+                "|---|---|\n"
+                "| 🟢 **STRONG evidence** | p < 0.001 — model's continuations are reliably closer to suspect targets than to control |\n"
+                "| 🟡 **MODERATE** | p < 0.05 — clear signal; bigger n makes it more certain |\n"
+                "| ⚪ **NO evidence** | Either the model didn't train on suspect, *or* sample too small |\n"
+                "| ⚪ **REVERSE signal** | Control sims > suspect sims — usually means style mismatch between suspect and control, not membership info |\n"
+            )
+    with demo_col:
+        st.caption(
+            "💡 The hosted demo shows a **pre-computed** Phase 1 result "
+            "(n=250 Shutterstock vs 98 archive.org). Live PETAL requires GPU + "
+            "MusicGen-small (~$1 on Modal A10G), so this tab is view-only — "
+            "see the [README](https://github.com/Yikai-Cao/influence-ai-demo) "
+            "to reproduce."
+        )
+
+    st.markdown("---")
+    st.markdown("#### Phase 1 result — Shutterstock vs archive.org CC")
+
+    petal_example_path = APP_DIR / "examples" / "petal_shutter_n250_demo.json"
+    if not petal_example_path.exists():
+        st.warning(
+            f"Demo result not found at {petal_example_path}. "
+            "Run the PETAL Phase 1 experiment via `modal_canary_validation.py::"
+            "petal_base_phase1` to regenerate it."
+        )
+    else:
+        col_pe1, col_pe2 = st.columns([1, 3])
+        with col_pe1:
+            show_petal_demo = st.button(
+                "🎯 Show Phase 1 audit",
+                help="Renders the pre-computed n=250+98 result. Instant — no "
+                     "live inference.",
+                key="petal_load_example",
+            )
+        with col_pe2:
+            st.caption(
+                "**Suspect** = 250 Shutterstock free-preview tracks (Meta paper "
+                "names Shutterstock as MusicGen training data). **Control** = 98 "
+                "archive.org netlabel CC tracks released 2024+ (post MusicGen "
+                "training cutoff). Both preprocessed to 32 kHz mono 30 s wavs. "
+                "Audited model: **base MusicGen-small** (no fine-tune, no adapter)."
+            )
+
+        if show_petal_demo or st.session_state.get("petal_demo_shown"):
+            st.session_state["petal_demo_shown"] = True
+            summary = json.loads(petal_example_path.read_text())
+            render_petal_panel(summary)
+
+    st.markdown("---")
+    with st.expander(
+        "Why this 8-experiment journey was needed (negative-finding-turned-positive)",
+        expanded=False,
+    ):
+        st.markdown(
+            "Our first 4 audio-PETAL runs gave **REVERSE** signal "
+            "(t = −2.72 on FMA-small vs archive.org). We initially "
+            "concluded PETAL audio fundamentally fails on small models. "
+            "Two diagnostic steps flipped the picture:\n\n"
+            "1. **Style-matched FMA-Electronic vs archive** (G): when we "
+            "filter suspect to the same genre as control, t flipped to "
+            "**+1.00** — confirming the REVERSE was a style confound, not "
+            "method failure.\n"
+            "2. **Shutterstock (known-in-training) as suspect** with n "
+            "scaled to 250: gives **t = +2.78, p = 0.003, d = 0.35** — "
+            "decisive directional + significant.\n\n"
+            "The negative-then-positive arc is itself the methodology "
+            "result: **audio-PETAL works on base pretrained models, but "
+            "is highly sensitive to style confound in the control set**. "
+            "Customer-facing claim: provide both suspect and control in "
+            "matched-style pairs.\n"
+        )
+
+    with st.expander("Method limitations", expanded=False):
+        st.markdown(
+            "- **Sample size needed**: d ≈ 0.35 needs n ≈ 100+ per side to "
+            "reach p < 0.05. Smaller corpora may give marginal results.\n"
+            "- **Style matching matters**: confound between suspect and "
+            "control styles can flip the signal direction. Recommend "
+            "filtering both to one genre / instrumentation cluster.\n"
+            "- **Greedy decoding only**: do_sample=True washes out the "
+            "memorization signal across diverse draws. Greedy is the only "
+            "decoding mode where PETAL works reliably.\n"
+            "- **MusicGen-small is the cheapest test**, but signal may "
+            "scale with model size (theory says larger models memorize "
+            "more). Phase 2 / MusicGen-large is on the roadmap.\n"
+            "- **Suno API not yet tested**. Phase 4 of the roadmap. Suno's "
+            "native lyric-to-song format is closer to Andre Duarte's "
+            "originally-proposed lyric-PETAL attack."
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# TAB 5 — LIVE AUDIT (user uploads → Modal PETAL → result)
+# ══════════════════════════════════════════════════════════════════════
+
+with tab_audit:
+    st.markdown("### 🚀 Audit your own music against MusicGen")
+    st.markdown(
+        "Upload **5 or more audio files** from your catalog. We'll run the "
+        "same PETAL pipeline that produced our headline **p = 0.003** "
+        "result on Shutterstock (see the 🎯 Black-box tab), but on **your** "
+        "tracks. Returns a per-corpus verdict with downloadable evidence."
+    )
+
+    audit_info_col, audit_demo_col = st.columns([2, 1])
+    with audit_info_col:
+        with st.expander("How this works (under the hood)", expanded=False):
+            st.markdown(
+                "1. **You upload** 5-50 audio files (mp3/wav/flac/ogg/m4a).\n"
+                "2. We send them to **Modal A10G** (our cloud GPU) — your "
+                "files leave your browser only over an HTTPS connection to "
+                "Modal, are deleted after the run.\n"
+                "3. For each clip: split prefix + target, feed prefix to "
+                "**base MusicGen-small**, capture the model's continuation.\n"
+                "4. Compute MFCC+chroma cosine between continuation and "
+                "actual target. Aggregate across your corpus.\n"
+                "5. Compare to our **98-clip archive.org CC control** "
+                "(post-2024, out-of-training-set).\n"
+                "6. Return Welch t-test p-value + Mann-Whitney robust check.\n"
+                "\n"
+                "Audio model: **facebook/musicgen-small** (300M params). "
+                "Larger models (e.g. MusicGen-large 3.3B, eventually Suno "
+                "when their API opens) are on the roadmap."
+            )
+    with audit_demo_col:
+        st.caption(
+            "**⚠️ This costs real GPU compute** (~$0.30-1 per audit on "
+            "Modal A10G). For the hosted demo, the deploy operator pays. "
+            "Be reasonable — the demo is for evaluation, not bulk scanning."
+        )
+
+    # Modal connectivity check — only show the audit UI if modal SDK is
+    # importable AND credentials are set. Otherwise show a graceful
+    # fallback explaining what's missing.
+    # Credentials accepted from either env vars (HF Space secrets) OR
+    # ~/.modal.toml (local dev, written by `modal token set`).
+    modal_ok = False
+    modal_err = None
+    try:
+        import modal as _modal_check  # noqa: F401
+        import os
+        has_env_creds = bool(os.environ.get("MODAL_TOKEN_ID")) and \
+                        bool(os.environ.get("MODAL_TOKEN_SECRET"))
+        has_local_creds = Path(os.path.expanduser("~/.modal.toml")).exists()
+        if has_env_creds or has_local_creds:
+            modal_ok = True
+        else:
+            modal_err = (
+                "Modal credentials missing. Set `MODAL_TOKEN_ID` and "
+                "`MODAL_TOKEN_SECRET` as HF Space secrets (or run "
+                "`modal token set` locally) to enable live audit. Until "
+                "then, view the pre-computed example in the 🎯 Black-box tab."
+            )
+    except ImportError as e:
+        modal_err = f"`modal` Python package not installed: {e}"
+
+    if not modal_ok:
+        st.warning(modal_err)
+        st.stop()  # Skip the rest of the tab — no point rendering UI we can't use
+
+    # ── Upload UI ──────────────────────────────────────────────────────
+
+    st.markdown("---")
+    st.markdown("#### Step 1 — upload suspect audio")
+    st.caption(
+        "Songs you want to test for membership in MusicGen's training set. "
+        "Recommended: **5-30 files**, each ≥10 s long. Style consistency "
+        "between your suspect set and the control set matters — see "
+        "[caveats](https://github.com/Yikai-Cao/influence-ai-demo) before "
+        "interpreting results."
+    )
+    audit_suspect = st.file_uploader(
+        "Drop your music files (mp3 / wav / flac / ogg / m4a)",
+        type=["mp3", "wav", "flac", "ogg", "m4a"],
+        accept_multiple_files=True,
+        key="audit_suspect_files",
+    )
+
+    st.markdown("#### Step 2 — choose control set")
+    audit_control_choice = st.radio(
+        "Control = music known *not* to be in MusicGen's training set "
+        "(post-2024 CC). Cleaner the control, sharper the signal.",
+        [
+            "Use built-in default (98 archive.org netlabel CC tracks, "
+            "experimental electronic — pre-uploaded to our backend)",
+            "Upload my own (advanced — best matched to your suspect's style)",
+        ],
+        index=0,
+        key="audit_control_choice",
+    )
+    audit_use_default_control = audit_control_choice.startswith("Use built-in")
+    audit_custom_control = None
+    if not audit_use_default_control:
+        audit_custom_control = st.file_uploader(
+            "Drop control music files (same style as suspect, post-2024 CC)",
+            type=["mp3", "wav", "flac", "ogg", "m4a"],
+            accept_multiple_files=True,
+            key="audit_control_files",
+        )
+
+    # ── Sample-count + cost preview ────────────────────────────────────
+
+    st.markdown("#### Step 3 — review and run")
+    n_susp = len(audit_suspect or [])
+    n_ctrl = len(audit_custom_control or []) if not audit_use_default_control else 98
+    susp_mb = sum(len(f.getvalue()) for f in (audit_suspect or [])) / 1024 / 1024
+    ctrl_mb = (
+        sum(len(f.getvalue()) for f in (audit_custom_control or [])) / 1024 / 1024
+        if not audit_use_default_control else 0.0
+    )
+
+    c_n1, c_n2, c_n3 = st.columns(3)
+    c_n1.metric("Suspect clips", n_susp,
+                help="Statistical power: n≥10 marginal, n≥30 reliable, "
+                     "n≥100 high confidence.")
+    c_n2.metric("Control clips", n_ctrl)
+    c_n3.metric("~Time / cost",
+                f"~{max(3, int((n_susp + n_ctrl) * 0.1))} min / "
+                f"~${(n_susp + n_ctrl) * 0.005 + 0.20:.2f}",
+                help="Estimate. A10G at $1.10/hr, MusicGen continuation "
+                     "~5s per clip + startup overhead.")
+
+    if n_susp < 3:
+        st.info("Need at least 3 suspect clips (recommended ≥5 for "
+                "marginal signal, ≥30 for reliable verdict).")
+    if not audit_use_default_control and n_ctrl < 3:
+        st.info("Need at least 3 control clips, or use the built-in default.")
+
+    can_run = (n_susp >= 3) and (audit_use_default_control or n_ctrl >= 3)
+    run_audit = st.button(
+        "🚀 Run live audit",
+        type="primary",
+        disabled=not can_run,
+        key="audit_run_button",
+        help="Calls Modal A10G — wait 3-15 min depending on file count. "
+             "Don't close this tab; we hold the connection open.",
+    )
+
+    if run_audit:
+        with st.status(
+            f"Running PETAL audit on {n_susp} suspect + {n_ctrl} control "
+            f"clips… (3-15 min)",
+            expanded=True,
+        ) as status:
+            try:
+                import modal
+                status.write("📤 Reading uploaded files into memory…")
+                suspect_bytes = [(f.name, f.getvalue()) for f in audit_suspect]
+                control_bytes = None
+                if not audit_use_default_control:
+                    control_bytes = [
+                        (f.name, f.getvalue()) for f in audit_custom_control
+                    ]
+
+                total_mb = susp_mb + ctrl_mb
+                status.write(f"☁️ Sending {total_mb:.1f} MB to Modal A10G…")
+
+                # Look up the deployed function. The app must already be
+                # deployed via `modal deploy modal_canary_validation.py`
+                # OR we use Function.from_name on an ephemeral run.
+                # Since the app isn't continuously deployed, we use the
+                # ephemeral pattern: lookup by app name + function name.
+                func = modal.Function.from_name(
+                    "influence-ai-canary-validation",
+                    "petal_live_audit_remote",
+                )
+
+                status.write("⚙️ MusicGen-small spinning up + preprocessing…")
+                summary = func.remote(
+                    suspect_files=suspect_bytes,
+                    use_default_control=audit_use_default_control,
+                    custom_control_files=control_bytes,
+                )
+
+                status.update(
+                    label=f"✅ Audit complete in "
+                          f"{summary.get('config', {}).get('elapsed_s', '?'):.0f}s",
+                    state="complete",
+                    expanded=False,
+                )
+                st.session_state["audit_result"] = summary
+            except Exception as e:
+                import traceback
+                status.update(
+                    label=f"❌ Audit failed: {type(e).__name__}",
+                    state="error",
+                )
+                st.code(traceback.format_exc(), language="text")
+
+    # ── Result panel (persisted across reruns via session state) ───────
+
+    if "audit_result" in st.session_state:
+        st.markdown("---")
+        st.markdown("#### Step 4 — your verdict")
+        render_petal_panel(st.session_state["audit_result"])
+
+    st.markdown("---")
+    with st.expander("Privacy & terms", expanded=False):
+        st.markdown(
+            "- Your audio files are sent to Modal Inc.'s GPU servers over "
+            "HTTPS. After the audit finishes, the files are written to "
+            "`/tmp` inside the Modal container and that container is "
+            "torn down within minutes; **we don't persist your uploads**.\n"
+            "- The audit result JSON is logged to our Modal results "
+            "volume for debugging. Don't upload anything you wouldn't "
+            "want a developer to potentially see.\n"
+            "- This is a research demo. **Not legal advice.** A "
+            "statistical p-value isn't a court verdict — talk to a "
+            "lawyer about how to use this evidence."
+        )
