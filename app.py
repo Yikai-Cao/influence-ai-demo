@@ -2161,31 +2161,31 @@ with tab_petal:
     st.markdown("---")
     st.markdown("## 1. See a real audit result (instant)")
 
-    selected_model_label = st.selectbox(
-        "**Which model to view audit results for?**",
+    example_model_label = st.selectbox(
+        "**Which model's pre-computed audit to view?**",
         options=list(AUDIT_MODELS.keys()),
         index=0,
-        key="petal_model_select",
+        key="petal_example_model_select",
         help="Pre-computed audits we've run. MusicGen + Suno have real "
              "verdicts; Stable Audio is smoke-only pending matched training data.",
     )
-    selected_model = AUDIT_MODELS[selected_model_label]
+    example_model = AUDIT_MODELS[example_model_label]
 
     info_cols = st.columns([2, 1])
     with info_cols[0]:
         st.markdown(
-            f"**{selected_model_label}** — {selected_model['summary']}\n\n"
-            f"- Training data (per disclosure): {selected_model['training_data']}\n"
-            f"- Sample size in demo: n = {selected_model['n_in_demo']}"
+            f"**{example_model_label}** — {example_model['summary']}\n\n"
+            f"- Training data (per disclosure): {example_model['training_data']}\n"
+            f"- Sample size in demo: n = {example_model['n_in_demo']}"
         )
     with info_cols[1]:
         st.caption(
             f"**Live audit:** "
-            f"{'✅ supported' if selected_model['live_supported'] else '⏳ coming Phase 2'}  \n"
-            f"**Est. cost:** {selected_model['live_cost_estimate']}"
+            f"{'✅ supported' if example_model['live_supported'] else '⏳ coming Phase 2'}  \n"
+            f"**Est. cost:** {example_model['live_cost_estimate']}"
         )
 
-    example_file = selected_model.get("example_file")
+    example_file = example_model.get("example_file")
     if not example_file:
         st.info(
             "This model only has smoke-test data (no full pre-computed result yet). "
@@ -2198,40 +2198,65 @@ with tab_petal:
             st.warning(f"Demo file missing: {petal_example_path}")
         else:
             show_demo_btn = st.button(
-                f"🎯 Show audit result on {selected_model_label.split('(')[0].strip()}",
-                key=f"petal_load_{selected_model['id']}",
+                f"🎯 Show audit result on {example_model_label.split('(')[0].strip()}",
+                key=f"petal_load_{example_model['id']}",
                 type="primary",
             )
-            shown_key = f"petal_demo_shown_{selected_model['id']}"
+            shown_key = f"petal_demo_shown_{example_model['id']}"
             if show_demo_btn or st.session_state.get(shown_key):
                 st.session_state[shown_key] = True
                 summary = json.loads(petal_example_path.read_text())
                 render_petal_panel(summary)
 
     # ════════════════════════════════════════════════════════════════
-    # SECTION 2 — Live audit on user upload
+    # SECTION 2 — Live audit on user upload (independent model selector)
     # ════════════════════════════════════════════════════════════════
     st.markdown("---")
     st.markdown("## 2. Audit your own music (live)")
 
-    # Phase 2: Suno live ENABLED. Phase 3: Stable Audio live ENABLED.
-    if selected_model["id"] == "suno-v5.5":
-        selected_model["live_supported"] = True
-        selected_model["live_backend"] = "modal_suno_recap_live_audit"
-    elif selected_model["id"] == "stable-audio-2.5":
-        selected_model["live_supported"] = True
-        selected_model["live_backend"] = "modal_stable_audio_recap_live_audit"
+    # Independent live-audit model selector (separate from Section 1)
+    live_model_label = st.selectbox(
+        "**Which model to audit your uploaded music against?**",
+        options=list(AUDIT_MODELS.keys()),
+        index=0,
+        key="petal_live_model_select",
+        help="Choose the model that will see your audio. Each has its own "
+             "cost, time, and known/unknown training-data profile.",
+    )
+    live_model = AUDIT_MODELS[live_model_label]
 
-    if not selected_model["live_supported"]:
+    # Per-model "you're about to do this" summary card
+    live_info_cols = st.columns([2, 1])
+    with live_info_cols[0]:
+        st.markdown(
+            f"**Auditing against: {live_model_label}**\n\n"
+            f"- Backend: {live_model.get('live_backend', '—')}\n"
+            f"- Training data (per disclosure): {live_model['training_data']}"
+        )
+    with live_info_cols[1]:
+        st.caption(
+            f"**Est. cost:** {live_model['live_cost_estimate']}  \n"
+            f"**Hard cap:** 30 clips/audit, 200/day"
+        )
+
+    # Phase 2: Suno live ENABLED. Phase 3: Stable Audio live ENABLED.
+    if live_model["id"] == "suno-v5.5":
+        live_model["live_supported"] = True
+        live_model["live_backend"] = "modal_suno_recap_live_audit"
+    elif live_model["id"] == "stable-audio-2.5":
+        live_model["live_supported"] = True
+        live_model["live_backend"] = "modal_stable_audio_recap_live_audit"
+
+    if not live_model["live_supported"]:
         st.info(
-            f"**⏳ Live audit on {selected_model_label} is coming in Phase 2.**\n\n"
+            f"**⏳ Live audit on {live_model_label} is coming in Phase 2.**\n\n"
             f"Currently we can only run pre-computed examples for this model "
             f"(see Section 1 above). Live audit requires:\n\n"
             f"- Server-side audio hosting (your audio → public URL → "
-            f"{selected_model_label.split('(')[0].strip()} fetches)\n"
+            f"{live_model_label.split('(')[0].strip()} fetches)\n"
             f"- Backend API key as a server secret (not exposed to browser)\n"
             f"- Rate limiting to prevent abuse (est. cost: "
-            f"**{selected_model['live_cost_estimate']}**)\n\n"
+            f"**{live_model['live_cost_estimate']}**)\n\n"
             f"For now: **switch to MusicGen-small** in the dropdown above "
             f"to run live on your audio."
         )
@@ -2241,7 +2266,7 @@ with tab_petal:
         f"Upload **5-50 audio files** from your catalog. We run the same "
         f"CLAP-ReCaP pipeline as the example above, on **your** tracks, "
         f"compared against our built-in baseline of music we know "
-        f"{selected_model_label.split('(')[0].strip()} wasn't trained on. "
+        f"{live_model_label.split('(')[0].strip()} wasn't trained on. "
         f"Returns a verdict with downloadable evidence."
     )
 
@@ -2316,14 +2341,14 @@ with tab_petal:
         # "use your own control" path is disabled when Suno is selected.
         audit_use_default_control = True
         audit_custom_control = None
-        if selected_model["id"] == "suno-v5.5":
+        if live_model["id"] == "suno-v5.5":
             st.caption(
                 "✅ Using the cached **n=17 archive.org post-2024 CC control** "
                 "(established in our 2026-05-26 n=30 run, p=0.003 baseline). "
                 "Suno credits are billed only for **your suspect uploads**, "
                 "not the control side — control sims are pre-computed."
             )
-        elif selected_model["id"] == "stable-audio-2.5":
+        elif live_model["id"] == "stable-audio-2.5":
             st.caption(
                 "✅ Using the cached **archive.org post-2024 CC control** "
                 "(precomputed via fal.ai Stable Audio 2.5 inpaint). "
@@ -2379,7 +2404,7 @@ with tab_petal:
                          "n≥100 high confidence.")
 
         # Cost / time model-aware
-        if selected_model["id"] == "suno-v5.5":
+        if live_model["id"] == "suno-v5.5":
             # Kie.ai: $0.06 per upload-extend call (12 credits) — only your
             # suspect clips bill (control is cached). Suno gen is ~3 min/clip
             # but parallel 6x → effective ~30s/clip wall time + overhead.
@@ -2388,7 +2413,7 @@ with tab_petal:
             help_str = (f"Suno via Kie.ai: $0.06/call × {n_susp} suspect "
                         f"(control cached, $0 there). Time = parallel "
                         f"polling + CLAP scoring on Modal A10G.")
-        elif selected_model["id"] == "stable-audio-2.5":
+        elif live_model["id"] == "stable-audio-2.5":
             # fal.ai: $0.20/inpaint call (much faster, ~30s wall time per clip)
             est_time = max(3, int(n_susp * 0.5) + 2)
             est_cost = n_susp * 0.20 + 0.30
@@ -2438,7 +2463,7 @@ with tab_petal:
                     status.write(f"☁️ Sending {total_mb:.1f} MB to Modal A10G…")
 
                     # Dispatch by selected model
-                    if selected_model["id"] == "musicgen-small":
+                    if live_model["id"] == "musicgen-small":
                         func = modal.Function.from_name(
                             "influence-ai-canary-validation",
                             "clap_petal_live_audit_remote",
@@ -2449,7 +2474,7 @@ with tab_petal:
                             use_default_control=audit_use_default_control,
                             custom_control_files=control_bytes,
                         )
-                    elif selected_model["id"] == "suno-v5.5":
+                    elif live_model["id"] == "suno-v5.5":
                         func = modal.Function.from_name(
                             "influence-ai-canary-validation",
                             "suno_recap_live_audit_remote",
@@ -2459,7 +2484,7 @@ with tab_petal:
                             "(submit + poll, ~3-5 min per clip)…"
                         )
                         summary = func.remote(suspect_files=suspect_bytes)
-                    elif selected_model["id"] == "stable-audio-2.5":
+                    elif live_model["id"] == "stable-audio-2.5":
                         func = modal.Function.from_name(
                             "influence-ai-canary-validation",
                             "stable_audio_recap_live_audit_remote",
@@ -2471,7 +2496,7 @@ with tab_petal:
                         summary = func.remote(suspect_files=suspect_bytes)
                     else:
                         raise RuntimeError(
-                            f"Live audit not implemented for {selected_model['id']}"
+                            f"Live audit not implemented for {live_model['id']}"
                         )
 
                     elapsed = summary.get("config", {}).get("elapsed_s", 0)
