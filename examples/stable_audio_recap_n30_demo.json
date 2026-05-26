@@ -1,26 +1,50 @@
 {
-  "experiment": "stable_audio_recap_n5_demo",
+  "experiment": "stable_audio_recap_n30_demo",
   "config": {
     "metric": "CLAP cosine (laion/clap-htsat-unfused)",
     "model": "Stable Audio 2.5 via fal.ai inpaint (mask 10-20s)",
-    "member_source": "Shutterstock free-preview tracks (status in Stability training set: UNDISCLOSED)",
+    "member_source": "30 Shutterstock free-preview tracks (status in Stability training set: UNDISCLOSED)",
     "nonmember_source": "30 archive.org netlabel CC tracks released post-2024",
-    "n_member_sample_warning": "n=5 only \u2014 verdict is illustrative, not definitive. d=0.60 is a medium effect but needs n\u226510 to clear p<0.05.",
     "training_data_known": false
   },
   "report": {
-    "n_member": 5,
+    "n_member": 30,
     "n_nonmember": 30,
-    "member_mean_sim": 0.8200157761573792,
+    "member_mean_sim": 0.8478488544623057,
     "nonmember_mean_sim": 0.7363871147235235,
-    "t_stat": 1.4050880199219502,
-    "p_value": 0.10178949223303109,
+    "t_stat": 3.1756617634677893,
+    "p_value": 0.0012772219030509069,
     "member_sims": [
-      0.8916163444519043,
-      0.838467001914978,
-      0.8425145149230957,
-      0.9075925350189209,
-      0.6198884844779968
+      0.8593549728393555,
+      0.7206693887710571,
+      0.8064594268798828,
+      0.5703610777854919,
+      0.9352160692214966,
+      0.8735145330429077,
+      0.881990909576416,
+      0.93699049949646,
+      0.9138778448104858,
+      0.8768593072891235,
+      0.830981969833374,
+      0.7074767351150513,
+      0.8325798511505127,
+      0.9486709237098694,
+      0.8765884637832642,
+      0.8552458882331848,
+      0.6572225689888,
+      0.7101499438285828,
+      0.9138355255126953,
+      0.9026167988777161,
+      0.693007230758667,
+      0.9425852298736572,
+      0.9155316352844238,
+      0.9328633546829224,
+      0.9525650143623352,
+      0.9747639894485474,
+      0.957014262676239,
+      0.710509717464447,
+      0.9440751075744629,
+      0.8018873929977417
     ],
     "nonmember_sims": [
       0.6911016702651978,
@@ -54,7 +78,7 @@
       0.876299262046814,
       0.7399771213531494
     ],
-    "cohen_d": 0.5976831273690202
+    "cohen_d": 0.819952341539895
   },
   "honesty_caveat": "Stable Audio's training data is undisclosed. Strong signal here cannot be definitively attributed to training-set membership. Treat as 'this audio shares features Stable Audio reconstructs more accurately than control', not 'Stable Audio was trained on this'."
 }

@@ -2145,13 +2145,13 @@ with tab_petal:
         },
         "Stable Audio 2.5 (Stability AI, closed)": {
             "id": "stable-audio-2.5",
-            "example_file": "stable_audio_recap_n5_demo.json",
+            "example_file": "stable_audio_recap_n30_demo.json",
             "live_supported": True,
             "live_backend": "modal_stable_audio_recap_live_audit",
             "live_cost_estimate": "$0.20 per clip (~30 s/clip wall time, fal.ai)",
             "training_data": "Undisclosed by Stability AI (partnership with AudioSparx publicly announced)",
-            "n_in_demo": "5+30",
-            "summary": "Live audit works. Headline n=5 example: **p≈0.10, d=0.60** — medium effect, underpowered. Larger n needed for confident verdict.",
+            "n_in_demo": "30+30",
+            "summary": "Closed-API via fal.ai inpaint. **p=0.0013, d=0.82** at n=30. Caveat: training data undisclosed, so signal can't be definitively attributed to membership.",
         },
     }
 
