@@ -2214,6 +2214,11 @@ with tab_petal:
     st.markdown("---")
     st.markdown("## 2. Audit your own music (live)")
 
+    # Phase 2: Suno live audit ENABLED. Update registry flag.
+    if selected_model["id"] == "suno-v5.5":
+        selected_model["live_supported"] = True
+        selected_model["live_backend"] = "modal_suno_recap_live_audit"
+
     if not selected_model["live_supported"]:
         st.info(
             f"**⏳ Live audit on {selected_model_label} is coming in Phase 2.**\n\n"
@@ -2304,37 +2309,47 @@ with tab_petal:
         )
 
         # Default: use built-in control. Power users can override below.
+        # NOTE: Suno backend uses a fixed cached control (n=17), so the
+        # "use your own control" path is disabled when Suno is selected.
         audit_use_default_control = True
         audit_custom_control = None
-        with st.expander(
-            "Advanced — use your own control instead of the built-in",
-            expanded=False,
-        ):
+        if selected_model["id"] == "suno-v5.5":
             st.caption(
-                "Audio MIA fundamentally requires a baseline of music "
-                "known *not* to be in the model's training set. Our built-in "
-                "(98 post-2024 archive.org CC tracks) works for most cases. "
-                "If your suspect is a specific genre (e.g. jazz), uploading "
-                "matched-style CC controls can sharpen the signal."
+                "✅ Using the cached **n=17 archive.org post-2024 CC control** "
+                "(established in our 2026-05-26 n=30 run, p=0.003 baseline). "
+                "Suno credits are billed only for **your suspect uploads**, "
+                "not the control side — control sims are pre-computed."
             )
-            custom_files = st.file_uploader(
-                "Drop your own control set (5+ post-2024 CC tracks, "
-                "ideally matched to your suspect's style)",
-                type=["mp3", "wav", "flac", "ogg", "m4a"],
-                accept_multiple_files=True,
-                key="audit_control_files",
-            )
-            if custom_files and len(custom_files) >= 3:
-                audit_use_default_control = False
-                audit_custom_control = custom_files
-                st.success(f"Using your {len(custom_files)} custom control "
-                           "clips instead of the built-in baseline.")
-            elif custom_files:
-                st.warning(
-                    f"Need ≥3 control clips to override the default "
-                    f"(you uploaded {len(custom_files)}). Built-in will be "
-                    f"used."
+        else:
+            with st.expander(
+                "Advanced — use your own control instead of the built-in",
+                expanded=False,
+            ):
+                st.caption(
+                    "Audio MIA fundamentally requires a baseline of music "
+                    "known *not* to be in the model's training set. Our built-in "
+                    "(98 post-2024 archive.org CC tracks) works for most cases. "
+                    "If your suspect is a specific genre (e.g. jazz), uploading "
+                    "matched-style CC controls can sharpen the signal."
                 )
+                custom_files = st.file_uploader(
+                    "Drop your own control set (5+ post-2024 CC tracks, "
+                    "ideally matched to your suspect's style)",
+                    type=["mp3", "wav", "flac", "ogg", "m4a"],
+                    accept_multiple_files=True,
+                    key="audit_control_files",
+                )
+                if custom_files and len(custom_files) >= 3:
+                    audit_use_default_control = False
+                    audit_custom_control = custom_files
+                    st.success(f"Using your {len(custom_files)} custom control "
+                               "clips instead of the built-in baseline.")
+                elif custom_files:
+                    st.warning(
+                        f"Need ≥3 control clips to override the default "
+                        f"(you uploaded {len(custom_files)}). Built-in will be "
+                        f"used."
+                    )
 
         # ── Step 2: cost preview + run ────────────────────────────────
         st.markdown("#### Step 2 — review and run")
@@ -2350,11 +2365,26 @@ with tab_petal:
         c_n1.metric("Your clips", n_susp,
                     help="Statistical power: n≥10 marginal, n≥30 reliable, "
                          "n≥100 high confidence.")
+
+        # Cost / time model-aware
+        if selected_model["id"] == "suno-v5.5":
+            # Kie.ai: $0.06 per upload-extend call (12 credits) — only your
+            # suspect clips bill (control is cached). Suno gen is ~3 min/clip
+            # but parallel 6x → effective ~30s/clip wall time + overhead.
+            est_time = max(5, int(n_susp * 0.5) + 3)
+            est_cost = n_susp * 0.06 + 0.30
+            help_str = (f"Suno via Kie.ai: $0.06/call × {n_susp} suspect "
+                        f"(control cached, $0 there). Time = parallel "
+                        f"polling + CLAP scoring on Modal A10G.")
+        else:
+            # MusicGen: Modal A10G ~ $1.10/hr, ~5s gen + CLAP per clip
+            est_time = max(3, int((n_susp + n_ctrl) * 0.1))
+            est_cost = (n_susp + n_ctrl) * 0.005 + 0.20
+            help_str = ("Estimate. A10G at $1.10/hr, MusicGen continuation "
+                        "~5s per clip + CLAP embed + startup overhead.")
         c_n2.metric("~Time / cost",
-                    f"~{max(3, int((n_susp + n_ctrl) * 0.1))} min / "
-                    f"~${(n_susp + n_ctrl) * 0.005 + 0.20:.2f}",
-                    help="Estimate. A10G at $1.10/hr, MusicGen continuation "
-                         "~5s per clip + CLAP embed + startup overhead.")
+                    f"~{est_time} min / ~${est_cost:.2f}",
+                    help=help_str)
 
         if n_susp < 3:
             st.info("Need at least 3 clips (recommended ≥5 for marginal "
@@ -2389,17 +2419,32 @@ with tab_petal:
                     total_mb = susp_mb + ctrl_mb
                     status.write(f"☁️ Sending {total_mb:.1f} MB to Modal A10G…")
 
-                    func = modal.Function.from_name(
-                        "influence-ai-canary-validation",
-                        "clap_petal_live_audit_remote",
-                    )
-
-                    status.write("⚙️ MusicGen-small + CLAP spinning up + preprocessing…")
-                    summary = func.remote(
-                        suspect_files=suspect_bytes,
-                        use_default_control=audit_use_default_control,
-                        custom_control_files=control_bytes,
-                    )
+                    # Dispatch by selected model
+                    if selected_model["id"] == "musicgen-small":
+                        func = modal.Function.from_name(
+                            "influence-ai-canary-validation",
+                            "clap_petal_live_audit_remote",
+                        )
+                        status.write("⚙️ MusicGen-small + CLAP spinning up + preprocessing…")
+                        summary = func.remote(
+                            suspect_files=suspect_bytes,
+                            use_default_control=audit_use_default_control,
+                            custom_control_files=control_bytes,
+                        )
+                    elif selected_model["id"] == "suno-v5.5":
+                        func = modal.Function.from_name(
+                            "influence-ai-canary-validation",
+                            "suno_recap_live_audit_remote",
+                        )
+                        status.write(
+                            "⚙️ Hosting audio + Kie.ai upload-extend on Suno "
+                            "(submit + poll, ~3-5 min per clip)…"
+                        )
+                        summary = func.remote(suspect_files=suspect_bytes)
+                    else:
+                        raise RuntimeError(
+                            f"Live audit not implemented for {selected_model['id']}"
+                        )
 
                     elapsed = summary.get("config", {}).get("elapsed_s", 0)
                     label_str = f"✅ Audit complete in {elapsed:.0f}s" \
