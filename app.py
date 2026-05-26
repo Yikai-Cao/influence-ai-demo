@@ -2145,13 +2145,13 @@ with tab_petal:
         },
         "Stable Audio 2.5 (Stability AI, closed)": {
             "id": "stable-audio-2.5",
-            "example_file": None,   # only smoke data, n=5+5 — not promotable
-            "live_supported": False,
-            "live_backend": None,
-            "live_cost_estimate": "$1-2 per audit (~10 min, fal.ai)",
-            "training_data": "AudioSparx licensed catalog (per Stability partnership announcement)",
-            "n_in_demo": "5+5 smoke only",
-            "summary": "Smoke test only — Shutterstock isn't known-in-training for Stable Audio. Pending matched data.",
+            "example_file": "stable_audio_recap_n5_demo.json",
+            "live_supported": True,
+            "live_backend": "modal_stable_audio_recap_live_audit",
+            "live_cost_estimate": "$0.20 per clip (~30 s/clip wall time, fal.ai)",
+            "training_data": "Undisclosed by Stability AI (partnership with AudioSparx publicly announced)",
+            "n_in_demo": "5+30",
+            "summary": "Live audit works. Headline n=5 example: **p≈0.10, d=0.60** — medium effect, underpowered. Larger n needed for confident verdict.",
         },
     }
 
@@ -2214,10 +2214,13 @@ with tab_petal:
     st.markdown("---")
     st.markdown("## 2. Audit your own music (live)")
 
-    # Phase 2: Suno live audit ENABLED. Update registry flag.
+    # Phase 2: Suno live ENABLED. Phase 3: Stable Audio live ENABLED.
     if selected_model["id"] == "suno-v5.5":
         selected_model["live_supported"] = True
         selected_model["live_backend"] = "modal_suno_recap_live_audit"
+    elif selected_model["id"] == "stable-audio-2.5":
+        selected_model["live_supported"] = True
+        selected_model["live_backend"] = "modal_stable_audio_recap_live_audit"
 
     if not selected_model["live_supported"]:
         st.info(
@@ -2320,6 +2323,15 @@ with tab_petal:
                 "Suno credits are billed only for **your suspect uploads**, "
                 "not the control side — control sims are pre-computed."
             )
+        elif selected_model["id"] == "stable-audio-2.5":
+            st.caption(
+                "✅ Using the cached **archive.org post-2024 CC control** "
+                "(precomputed via fal.ai Stable Audio 2.5 inpaint). "
+                "fal.ai is billed only for **your suspect uploads** ($0.20/call). "
+                "⚠️ Stable Audio's training data is undisclosed — even a strong "
+                "signal here is hard to attribute definitively to training-set "
+                "membership."
+            )
         else:
             with st.expander(
                 "Advanced — use your own control instead of the built-in",
@@ -2376,6 +2388,12 @@ with tab_petal:
             help_str = (f"Suno via Kie.ai: $0.06/call × {n_susp} suspect "
                         f"(control cached, $0 there). Time = parallel "
                         f"polling + CLAP scoring on Modal A10G.")
+        elif selected_model["id"] == "stable-audio-2.5":
+            # fal.ai: $0.20/inpaint call (much faster, ~30s wall time per clip)
+            est_time = max(3, int(n_susp * 0.5) + 2)
+            est_cost = n_susp * 0.20 + 0.30
+            help_str = (f"Stable Audio 2.5 via fal.ai: $0.20/call × {n_susp} "
+                        f"suspect (control cached). fal.ai is fast (~30s/call).")
         else:
             # MusicGen: Modal A10G ~ $1.10/hr, ~5s gen + CLAP per clip
             est_time = max(3, int((n_susp + n_ctrl) * 0.1))
@@ -2439,6 +2457,16 @@ with tab_petal:
                         status.write(
                             "⚙️ Hosting audio + Kie.ai upload-extend on Suno "
                             "(submit + poll, ~3-5 min per clip)…"
+                        )
+                        summary = func.remote(suspect_files=suspect_bytes)
+                    elif selected_model["id"] == "stable-audio-2.5":
+                        func = modal.Function.from_name(
+                            "influence-ai-canary-validation",
+                            "stable_audio_recap_live_audit_remote",
+                        )
+                        status.write(
+                            "⚙️ Hosting audio + fal.ai Stable Audio 2.5 inpaint "
+                            "(submit + poll, ~30s per clip)…"
                         )
                         summary = func.remote(suspect_files=suspect_bytes)
                     else:

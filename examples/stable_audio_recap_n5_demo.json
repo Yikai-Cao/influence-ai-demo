@@ -1,0 +1,60 @@
+{
+  "experiment": "stable_audio_recap_n5_demo",
+  "config": {
+    "metric": "CLAP cosine (laion/clap-htsat-unfused)",
+    "model": "Stable Audio 2.5 via fal.ai inpaint (mask 10-20s)",
+    "member_source": "Shutterstock free-preview tracks (status in Stability training set: UNDISCLOSED)",
+    "nonmember_source": "30 archive.org netlabel CC tracks released post-2024",
+    "n_member_sample_warning": "n=5 only \u2014 verdict is illustrative, not definitive. d=0.60 is a medium effect but needs n\u226510 to clear p<0.05.",
+    "training_data_known": false
+  },
+  "report": {
+    "n_member": 5,
+    "n_nonmember": 30,
+    "member_mean_sim": 0.8200157761573792,
+    "nonmember_mean_sim": 0.7363871147235235,
+    "t_stat": 1.4050880199219502,
+    "p_value": 0.10178949223303109,
+    "member_sims": [
+      0.8916163444519043,
+      0.838467001914978,
+      0.8425145149230957,
+      0.9075925350189209,
+      0.6198884844779968
+    ],
+    "nonmember_sims": [
+      0.6911016702651978,
+      0.6556541919708252,
+      0.36686331033706665,
+      0.942490816116333,
+      0.5989890098571777,
+      0.4651842713356018,
+      0.8420178890228271,
+      0.8734636902809143,
+      0.5735939741134644,
+      0.6499805450439453,
+      0.7576274275779724,
+      0.938755452632904,
+      0.6705911755561829,
+      0.888985276222229,
+      0.865203857421875,
+      0.8845052719116211,
+      0.8199488520622253,
+      0.9076858758926392,
+      0.6304509043693542,
+      0.781998336315155,
+      0.8388113975524902,
+      0.7696854472160339,
+      0.5700926184654236,
+      0.36458393931388855,
+      0.8653758764266968,
+      0.8963946104049683,
+      0.678949773311615,
+      0.6863515973091125,
+      0.876299262046814,
+      0.7399771213531494
+    ],
+    "cohen_d": 0.5976831273690202
+  },
+  "honesty_caveat": "Stable Audio's training data is undisclosed. Strong signal here cannot be definitively attributed to training-set membership. Treat as 'this audio shares features Stable Audio reconstructs more accurately than control', not 'Stable Audio was trained on this'."
+}
