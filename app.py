@@ -2120,52 +2120,121 @@ with tab_petal:
         )
 
     # ════════════════════════════════════════════════════════════════
+    # MODEL REGISTRY — drives both Section 1 (examples) + Section 2 (live)
+    # ════════════════════════════════════════════════════════════════
+    AUDIT_MODELS = {
+        "MusicGen-small (Meta, open, 300M)": {
+            "id": "musicgen-small",
+            "example_file": "petal_clap_n100_demo.json",
+            "live_supported": True,
+            "live_backend": "modal_clap_petal_live_audit",
+            "live_cost_estimate": "$0.30-1 per audit (~5 min, Modal A10G)",
+            "training_data": "Shutterstock + Pond5 + Meta 10K internal (per paper)",
+            "n_in_demo": "100+98",
+            "summary": "Open-source baseline. Headline: **p=2.9×10⁻⁶, d=0.66**.",
+        },
+        "Suno V5.5 (closed API, ~3-10B)": {
+            "id": "suno-v5.5",
+            "example_file": "suno_recap_n30_demo.json",
+            "live_supported": False,
+            "live_backend": None,
+            "live_cost_estimate": "$2-5 per audit (~25 min, Kie.ai → Suno)",
+            "training_data": "Undisclosed (lawsuits allege Internet music corpora)",
+            "n_in_demo": "30+30",
+            "summary": "Closed-API. We ran via Kie.ai upload-extend. Result: **p=0.003, d=1.00**.",
+        },
+        "Stable Audio 2.5 (Stability AI, closed)": {
+            "id": "stable-audio-2.5",
+            "example_file": None,   # only smoke data, n=5+5 — not promotable
+            "live_supported": False,
+            "live_backend": None,
+            "live_cost_estimate": "$1-2 per audit (~10 min, fal.ai)",
+            "training_data": "AudioSparx licensed catalog (per Stability partnership announcement)",
+            "n_in_demo": "5+5 smoke only",
+            "summary": "Smoke test only — Shutterstock isn't known-in-training for Stable Audio. Pending matched data.",
+        },
+    }
+
+    # ════════════════════════════════════════════════════════════════
     # SECTION 1 — Pre-computed example (instant)
     # ════════════════════════════════════════════════════════════════
     st.markdown("---")
     st.markdown("## 1. See a real audit result (instant)")
 
-    petal_example_path = APP_DIR / "examples" / "petal_clap_n100_demo.json"
-    if not petal_example_path.exists():
-        st.warning(
-            f"Demo result not found at {petal_example_path}. "
-            "Run `modal run modal_canary_validation.py::clap_petal_phase1` "
-            "to regenerate it."
+    selected_model_label = st.selectbox(
+        "**Which model to view audit results for?**",
+        options=list(AUDIT_MODELS.keys()),
+        index=0,
+        key="petal_model_select",
+        help="Pre-computed audits we've run. MusicGen + Suno have real "
+             "verdicts; Stable Audio is smoke-only pending matched training data.",
+    )
+    selected_model = AUDIT_MODELS[selected_model_label]
+
+    info_cols = st.columns([2, 1])
+    with info_cols[0]:
+        st.markdown(
+            f"**{selected_model_label}** — {selected_model['summary']}\n\n"
+            f"- Training data (per disclosure): {selected_model['training_data']}\n"
+            f"- Sample size in demo: n = {selected_model['n_in_demo']}"
+        )
+    with info_cols[1]:
+        st.caption(
+            f"**Live audit:** "
+            f"{'✅ supported' if selected_model['live_supported'] else '⏳ coming Phase 2'}  \n"
+            f"**Est. cost:** {selected_model['live_cost_estimate']}"
+        )
+
+    example_file = selected_model.get("example_file")
+    if not example_file:
+        st.info(
+            "This model only has smoke-test data (no full pre-computed result yet). "
+            "See [README](https://github.com/Yikai-Cao/influence-ai-demo) for what "
+            "would need to change."
         )
     else:
-        col_pe1, col_pe2 = st.columns([1, 3])
-        with col_pe1:
-            show_petal_demo = st.button(
-                "🎯 Show Phase 1 audit",
-                help="Renders the pre-computed n=100+98 CLAP-ReCaP result. "
-                     "Instant — no live inference.",
-                key="petal_load_example",
+        petal_example_path = APP_DIR / "examples" / example_file
+        if not petal_example_path.exists():
+            st.warning(f"Demo file missing: {petal_example_path}")
+        else:
+            show_demo_btn = st.button(
+                f"🎯 Show audit result on {selected_model_label.split('(')[0].strip()}",
+                key=f"petal_load_{selected_model['id']}",
                 type="primary",
             )
-        with col_pe2:
-            st.caption(
-                "**Suspect** = 100 Shutterstock free-preview tracks (Meta paper "
-                "names Shutterstock as MusicGen training data). **Control** = 98 "
-                "archive.org netlabel CC tracks released 2024+ (post MusicGen "
-                "training cutoff). Audited model: **base MusicGen-small**. "
-                "Similarity metric: **LAION-CLAP** semantic cosine."
-            )
-
-        if show_petal_demo or st.session_state.get("petal_demo_shown"):
-            st.session_state["petal_demo_shown"] = True
-            summary = json.loads(petal_example_path.read_text())
-            render_petal_panel(summary)
+            shown_key = f"petal_demo_shown_{selected_model['id']}"
+            if show_demo_btn or st.session_state.get(shown_key):
+                st.session_state[shown_key] = True
+                summary = json.loads(petal_example_path.read_text())
+                render_petal_panel(summary)
 
     # ════════════════════════════════════════════════════════════════
     # SECTION 2 — Live audit on user upload
     # ════════════════════════════════════════════════════════════════
     st.markdown("---")
     st.markdown("## 2. Audit your own music (live)")
+
+    if not selected_model["live_supported"]:
+        st.info(
+            f"**⏳ Live audit on {selected_model_label} is coming in Phase 2.**\n\n"
+            f"Currently we can only run pre-computed examples for this model "
+            f"(see Section 1 above). Live audit requires:\n\n"
+            f"- Server-side audio hosting (your audio → public URL → "
+            f"{selected_model_label.split('(')[0].strip()} fetches)\n"
+            f"- Backend API key as a server secret (not exposed to browser)\n"
+            f"- Rate limiting to prevent abuse (est. cost: "
+            f"**{selected_model['live_cost_estimate']}**)\n\n"
+            f"For now: **switch to MusicGen-small** in the dropdown above "
+            f"to run live on your audio."
+        )
+        st.stop()
+
     st.markdown(
-        "Upload **5-50 audio files** from your catalog. We run the same "
-        "CLAP-ReCaP pipeline as the example above, on **your** tracks, "
-        "compared against our built-in baseline of music we know MusicGen "
-        "wasn't trained on. Returns a verdict with downloadable evidence."
+        f"Upload **5-50 audio files** from your catalog. We run the same "
+        f"CLAP-ReCaP pipeline as the example above, on **your** tracks, "
+        f"compared against our built-in baseline of music we know "
+        f"{selected_model_label.split('(')[0].strip()} wasn't trained on. "
+        f"Returns a verdict with downloadable evidence."
     )
 
     audit_info_col, audit_demo_col = st.columns([2, 1])
