@@ -634,19 +634,19 @@ with hero_a:
     )
 with hero_b:
     st.markdown(
-        "**🎵 Music**  \n"
-        "Upload audio → check if a music model has seen it (needs logits)."
+        "**🎵 Music (MIA)**  \n"
+        "Upload audio → multi-feature MIA on MusicGen (needs logits)."
     )
 with hero_c:
     st.markdown(
-        "**🪤 Watermark**  \n"
+        "**🪤 Music (Canary)**  \n"
         "*Before* you release new music: hide a tag, scan for leaks later."
     )
 with hero_d:
     st.markdown(
-        "**🎯 Black-box audit**  \n"
-        "Upload audio → run **CLAP-ReCaP** (no logits needed). Or see "
-        "example."
+        "**🎯 Music (ReCaP)**  \n"
+        "Upload audio → **CLAP-ReCaP** on MusicGen / Suno / Stable Audio "
+        "(no logits needed). Or see example."
     )
 
 with st.expander("How to use this site (30 seconds)", expanded=False):
@@ -664,9 +664,9 @@ st.divider()
 
 tab_text, tab_audio, tab_canary, tab_petal = st.tabs([
     "📝 Text",
-    "🎵 Music",
-    "🪤 Watermark unreleased music",
-    "🎯 Black-box music audit",
+    "🎵 Music (MIA)",
+    "🪤 Music (Canary)",
+    "🎯 Music (ReCaP)",
 ])
 
 
